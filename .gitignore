@@ -24,3 +24,6 @@ vendor/
 .vscode/
 *.swp
 *.swo
+
+# Worktrees
+.worktrees/

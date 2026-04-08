@@ -1,2 +1,313 @@
-// parser.go implements a recursive-descent parser that produces an AST from tokens.
+// parser.go implements a recursive-descent parser that converts tokens into an AST.
 package dcl
+
+import (
+	"fmt"
+	"strconv"
+)
+
+// Parse parses DCL source into an AST File node.
+func Parse(filename string, src []byte) (*File, Diagnostics) {
+	lex := NewLexer(filename, src)
+	p := &parser{lex: lex}
+
+	// Prime two-token lookahead buffer.
+	p.cur = p.readNonComment()
+	p.peek = p.readNonComment()
+
+	file := p.parseFile()
+
+	// Merge lexer diagnostics into parser diagnostics.
+	all := make(Diagnostics, 0, len(lex.Diagnostics())+len(p.diags))
+	all = append(all, lex.Diagnostics()...)
+	all = append(all, p.diags...)
+	file.Diagnostics = all
+
+	return file, all
+}
+
+type parser struct {
+	lex   *Lexer
+	cur   Token // current token
+	peek  Token // one-token lookahead
+	diags Diagnostics
+}
+
+// tokenEnd computes the end Pos from a token's start position and literal length.
+// For strings it adds 2 to account for the surrounding quotes (which are stripped
+// from Token.Literal by the lexer). Single-line tokens only.
+func tokenEnd(tok Token) Pos {
+	length := len(tok.Literal)
+	if tok.Type == TokenString {
+		length += 2 // account for quotes
+	}
+	return Pos{
+		Filename: tok.Pos.Filename,
+		Line:     tok.Pos.Line,
+		Column:   tok.Pos.Column + length,
+		Offset:   tok.Pos.Offset + length,
+	}
+}
+
+// --- token management ---
+
+// readNonComment reads the next token from the lexer, skipping comments.
+func (p *parser) readNonComment() Token {
+	for {
+		tok := p.lex.NextToken()
+		if tok.Type != TokenComment {
+			return tok
+		}
+	}
+}
+
+// nextToken shifts peek→cur and reads a new peek.
+func (p *parser) nextToken() {
+	p.cur = p.peek
+	p.peek = p.readNonComment()
+}
+
+// skipNewlines consumes consecutive newline tokens.
+func (p *parser) skipNewlines() {
+	for p.cur.Type == TokenNewline {
+		p.nextToken()
+	}
+}
+
+// expect asserts the current token is of the given type, advances, and returns it.
+// If the type doesn't match, it records an error and returns ok=false.
+func (p *parser) expect(typ TokenType) (Token, bool) {
+	if p.cur.Type == typ {
+		tok := p.cur
+		p.nextToken()
+		return tok, true
+	}
+	p.addError(p.cur.Pos, fmt.Sprintf("expected %s, got %s", typ, p.cur.Type))
+	return p.cur, false
+}
+
+// addError appends an error diagnostic at the given position.
+func (p *parser) addError(pos Pos, msg string) {
+	p.diags = append(p.diags, Diagnostic{
+		Severity: SeverityError,
+		Message:  msg,
+		Range:    Range{Start: pos, End: pos},
+	})
+}
+
+// --- error recovery ---
+
+// recoverToNextStatement skips tokens until a newline, }, or EOF.
+// If a newline is found it is consumed.
+func (p *parser) recoverToNextStatement() {
+	for p.cur.Type != TokenNewline && p.cur.Type != TokenRBrace && p.cur.Type != TokenEOF {
+		p.nextToken()
+	}
+	if p.cur.Type == TokenNewline {
+		p.nextToken()
+	}
+}
+
+// recoverToBlockEnd skips tokens until the matching closing brace (tracking depth).
+func (p *parser) recoverToBlockEnd() {
+	depth := 1
+	for depth > 0 && p.cur.Type != TokenEOF {
+		if p.cur.Type == TokenLBrace {
+			depth++
+		} else if p.cur.Type == TokenRBrace {
+			depth--
+		}
+		if depth > 0 {
+			p.nextToken()
+		}
+	}
+	// Consume the closing brace if present.
+	if p.cur.Type == TokenRBrace {
+		p.nextToken()
+	}
+}
+
+// --- parsing methods ---
+
+// parseFile parses the top-level structure: a sequence of blocks.
+func (p *parser) parseFile() *File {
+	fileStart := p.cur.Pos
+	var blocks []Block
+
+	for {
+		p.skipNewlines()
+
+		if p.cur.Type == TokenEOF {
+			break
+		}
+
+		if p.cur.Type != TokenIdent {
+			p.addError(p.cur.Pos, fmt.Sprintf("expected block type (identifier), got %s", p.cur.Type))
+			p.recoverToNextStatement()
+			continue
+		}
+
+		// Disambiguation: ident + peek = → top-level attribute error.
+		if p.peek.Type == TokenEquals {
+			p.addError(p.cur.Pos, "attributes are not allowed at the top level")
+			p.recoverToNextStatement()
+			continue
+		}
+
+		// ident + peek string/{ → block.
+		block, ok := p.parseBlock()
+		if ok {
+			blocks = append(blocks, block)
+		}
+	}
+
+	fileEnd := p.cur.Pos // EOF position
+	return &File{
+		Blocks: blocks,
+		Rng:    Range{Start: fileStart, End: fileEnd},
+	}
+}
+
+// parseBlock parses: type ["label"] { attrs... }
+func (p *parser) parseBlock() (Block, bool) {
+	typeToken := p.cur
+	p.nextToken() // consume type identifier
+
+	var label string
+	if p.cur.Type == TokenString {
+		label = p.cur.Literal
+		p.nextToken()
+	}
+
+	// Expect opening brace.
+	if _, ok := p.expect(TokenLBrace); !ok {
+		p.recoverToNextStatement()
+		return Block{}, false
+	}
+
+	var attrs []Attribute
+
+	for {
+		p.skipNewlines()
+
+		if p.cur.Type == TokenRBrace || p.cur.Type == TokenEOF {
+			break
+		}
+
+		if p.cur.Type != TokenIdent {
+			p.addError(p.cur.Pos, fmt.Sprintf("expected attribute name (identifier), got %s", p.cur.Type))
+			p.recoverToNextStatement()
+			continue
+		}
+
+		// Disambiguation inside block body.
+		if p.peek.Type == TokenEquals {
+			attr, ok := p.parseAttribute()
+			if ok {
+				attrs = append(attrs, attr)
+			}
+			continue
+		}
+
+		// ident + peek string/{/ident looks like a nested block — not supported yet.
+		if p.peek.Type == TokenString || p.peek.Type == TokenLBrace || p.peek.Type == TokenIdent {
+			p.addError(p.cur.Pos, "nested blocks are not yet supported")
+			p.recoverToNextStatement()
+			continue
+		}
+
+		p.addError(p.cur.Pos, fmt.Sprintf("expected '=' after attribute name, got %s", p.peek.Type))
+		p.recoverToNextStatement()
+	}
+
+	// Consume closing brace.
+	rbrace, ok := p.expect(TokenRBrace)
+	if !ok {
+		p.recoverToBlockEnd()
+		return Block{}, false
+	}
+
+	return Block{
+		Type:       typeToken.Literal,
+		Label:      label,
+		Attributes: attrs,
+		Rng:        Range{Start: typeToken.Pos, End: tokenEnd(rbrace)},
+	}, true
+}
+
+// parseAttribute parses: key = value
+func (p *parser) parseAttribute() (Attribute, bool) {
+	keyToken := p.cur
+	p.nextToken() // consume key
+
+	p.nextToken() // consume '='
+
+	expr, ok := p.parseExpression()
+	if !ok {
+		p.recoverToNextStatement()
+		return Attribute{}, false
+	}
+
+	return Attribute{
+		Key:   keyToken.Literal,
+		Value: expr,
+		Rng:   Range{Start: keyToken.Pos, End: expr.nodeRange().End},
+	}, true
+}
+
+// parseExpression parses a literal value: string, int, float, or bool.
+func (p *parser) parseExpression() (Expression, bool) {
+	tok := p.cur
+	switch tok.Type {
+	case TokenString:
+		p.nextToken()
+		return &LiteralString{
+			Value: tok.Literal,
+			Rng:   Range{Start: tok.Pos, End: tokenEnd(tok)},
+		}, true
+
+	case TokenInt:
+		val, err := strconv.ParseInt(tok.Literal, 10, 64)
+		if err != nil {
+			p.addError(tok.Pos, fmt.Sprintf("invalid integer: %s", tok.Literal))
+			p.nextToken()
+			return nil, false
+		}
+		p.nextToken()
+		return &LiteralInt{
+			Value: val,
+			Rng:   Range{Start: tok.Pos, End: tokenEnd(tok)},
+		}, true
+
+	case TokenFloat:
+		val, err := strconv.ParseFloat(tok.Literal, 64)
+		if err != nil {
+			p.addError(tok.Pos, fmt.Sprintf("invalid float: %s", tok.Literal))
+			p.nextToken()
+			return nil, false
+		}
+		p.nextToken()
+		return &LiteralFloat{
+			Value: val,
+			Rng:   Range{Start: tok.Pos, End: tokenEnd(tok)},
+		}, true
+
+	case TokenTrue:
+		p.nextToken()
+		return &LiteralBool{
+			Value: true,
+			Rng:   Range{Start: tok.Pos, End: tokenEnd(tok)},
+		}, true
+
+	case TokenFalse:
+		p.nextToken()
+		return &LiteralBool{
+			Value: false,
+			Rng:   Range{Start: tok.Pos, End: tokenEnd(tok)},
+		}, true
+
+	default:
+		p.addError(tok.Pos, fmt.Sprintf("expected value, got %s", tok.Type))
+		return nil, false
+	}
+}
