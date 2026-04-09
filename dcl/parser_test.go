@@ -1,6 +1,9 @@
 package dcl
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 // parseString is a test helper that calls Parse and fatals on unexpected errors.
 func parseString(t *testing.T, src string) *File {
@@ -1147,5 +1150,216 @@ func TestParseFunctionCallMissingComma(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected error mentioning \"expected ',' or ')'\", got: %s", diags.Error())
+	}
+}
+
+// --- Error recovery tests ---
+
+func TestRecovery_ErrorInFirstBlock_SecondBlockValid(t *testing.T) {
+	src := `resource "broken" {
+  name = )
+}
+resource "good" {
+  name = "valid"
+}`
+	f, diags := Parse("test.dcl", []byte(src))
+	if len(f.Blocks) != 2 {
+		t.Fatalf("expected 2 blocks, got %d", len(f.Blocks))
+	}
+	if !diags.HasErrors() {
+		t.Fatal("expected errors, got none")
+	}
+	good := f.Blocks[1]
+	if good.Type != "resource" || good.Label != "good" {
+		t.Errorf("expected second block type=resource label=good, got type=%q label=%q", good.Type, good.Label)
+	}
+	if len(good.Attributes) != 1 || good.Attributes[0].Key != "name" {
+		t.Errorf("expected second block to have 1 attr 'name', got %d attrs", len(good.Attributes))
+	}
+}
+
+func TestRecovery_ErrorInNestedBlock_ParentAndSiblingsParsed(t *testing.T) {
+	src := `outer "o" {
+  broken {
+    name = )
+  }
+  valid {
+    name = "ok"
+  }
+}`
+	f, diags := Parse("test.dcl", []byte(src))
+	if !diags.HasErrors() {
+		t.Fatal("expected errors, got none")
+	}
+	if len(f.Blocks) != 1 {
+		t.Fatalf("expected 1 outer block, got %d", len(f.Blocks))
+	}
+	outer := f.Blocks[0]
+	if len(outer.Blocks) != 2 {
+		t.Fatalf("expected 2 nested blocks, got %d", len(outer.Blocks))
+	}
+	sibling := outer.Blocks[1]
+	if sibling.Type != "valid" {
+		t.Errorf("expected sibling type 'valid', got %q", sibling.Type)
+	}
+	if len(sibling.Attributes) != 1 || sibling.Attributes[0].Key != "name" {
+		t.Errorf("expected sibling to have attr 'name'")
+	}
+}
+
+func TestRecovery_ThreeErrorsAllReported(t *testing.T) {
+	src := `a "a1" {
+  x = )
+}
+b "b1" {
+  y = )
+}
+c "c1" {
+  z = )
+}`
+	f, diags := Parse("test.dcl", []byte(src))
+	if len(f.Blocks) != 3 {
+		t.Fatalf("expected 3 blocks, got %d", len(f.Blocks))
+	}
+	errCount := 0
+	for _, d := range diags {
+		if d.Severity == SeverityError {
+			errCount++
+		}
+	}
+	if errCount != 3 {
+		t.Errorf("expected 3 errors, got %d", errCount)
+	}
+}
+
+func TestRecovery_DeepNesting(t *testing.T) {
+	src := `a "a1" {
+  b "b1" {
+    c {
+      x = )
+    }
+    d {
+      name = "ok"
+    }
+  }
+}`
+	f, diags := Parse("test.dcl", []byte(src))
+	if !diags.HasErrors() {
+		t.Fatal("expected errors, got none")
+	}
+	if len(f.Blocks) != 1 {
+		t.Fatalf("expected 1 top block, got %d", len(f.Blocks))
+	}
+	a := f.Blocks[0]
+	if len(a.Blocks) != 1 {
+		t.Fatalf("expected 1 nested block in a, got %d", len(a.Blocks))
+	}
+	b := a.Blocks[0]
+	if len(b.Blocks) != 2 {
+		t.Fatalf("expected 2 nested blocks in b, got %d", len(b.Blocks))
+	}
+	d := b.Blocks[1]
+	if d.Type != "d" {
+		t.Errorf("expected block type 'd', got %q", d.Type)
+	}
+	if len(d.Attributes) != 1 || d.Attributes[0].Key != "name" {
+		t.Errorf("expected d to have attr 'name'")
+	}
+}
+
+func TestRecovery_ErrorCap(t *testing.T) {
+	// Generate 25 blocks each with an error.
+	src := ""
+	for i := 0; i < 25; i++ {
+		src += fmt.Sprintf("block%d {\n  x = )\n}\n", i)
+	}
+	_, diags := Parse("test.dcl", []byte(src))
+	errCount := 0
+	for _, d := range diags {
+		if d.Severity == SeverityError {
+			errCount++
+		}
+	}
+	// 20 real errors + 1 sentinel "too many errors"
+	if errCount != 21 {
+		t.Errorf("expected 21 error diagnostics (20 + sentinel), got %d", errCount)
+	}
+	last := diags[len(diags)-1]
+	if !containsSubstring(last.Message, "too many errors") {
+		t.Errorf("expected last diagnostic to say 'too many errors', got %q", last.Message)
+	}
+}
+
+func TestRecovery_MissingClosingBraceAtEOF(t *testing.T) {
+	src := `resource "r" {
+  name = "hello"
+`
+	f, diags := Parse("test.dcl", []byte(src))
+	if !diags.HasErrors() {
+		t.Fatal("expected errors, got none")
+	}
+	if len(f.Blocks) != 1 {
+		t.Fatalf("expected 1 partial block, got %d", len(f.Blocks))
+	}
+	b := f.Blocks[0]
+	if b.Type != "resource" || b.Label != "r" {
+		t.Errorf("expected type=resource label=r, got type=%q label=%q", b.Type, b.Label)
+	}
+	if len(b.Attributes) != 1 || b.Attributes[0].Key != "name" {
+		t.Errorf("expected 1 attr 'name', got %d attrs", len(b.Attributes))
+	}
+	found := false
+	for _, d := range diags {
+		if containsSubstring(d.Message, "missing closing '}'") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected error about missing closing '}', got: %s", diags.Error())
+	}
+}
+
+func TestRecovery_ValidFileUnaffected(t *testing.T) {
+	src := `ism "security_baseline" {
+  version = "1.0"
+  control "access" {
+    severity = "high"
+    rule {
+      description = "require MFA"
+      enabled = true
+    }
+  }
+  control "logging" {
+    severity = "medium"
+  }
+}`
+	f, diags := Parse("test.dcl", []byte(src))
+	if diags.HasErrors() {
+		t.Fatalf("expected no errors, got: %s", diags.Error())
+	}
+	if len(f.Blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(f.Blocks))
+	}
+	ism := f.Blocks[0]
+	if ism.Type != "ism" || ism.Label != "security_baseline" {
+		t.Errorf("unexpected top block: type=%q label=%q", ism.Type, ism.Label)
+	}
+	if len(ism.Attributes) != 1 {
+		t.Errorf("expected 1 attr, got %d", len(ism.Attributes))
+	}
+	if len(ism.Blocks) != 2 {
+		t.Fatalf("expected 2 nested blocks, got %d", len(ism.Blocks))
+	}
+	access := ism.Blocks[0]
+	if access.Type != "control" || access.Label != "access" {
+		t.Errorf("unexpected first nested: type=%q label=%q", access.Type, access.Label)
+	}
+	if len(access.Blocks) != 1 || access.Blocks[0].Type != "rule" {
+		t.Errorf("expected 1 rule block inside access")
+	}
+	logging := ism.Blocks[1]
+	if logging.Type != "control" || logging.Label != "logging" {
+		t.Errorf("unexpected second nested: type=%q label=%q", logging.Type, logging.Label)
 	}
 }
