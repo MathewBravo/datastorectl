@@ -545,6 +545,267 @@ func TestParseMapMissingEquals(t *testing.T) {
 	}
 }
 
+func TestParseNestedLabeledBlock(t *testing.T) {
+	src := `policy "p1" {
+  state "hot" {
+    priority = 1
+  }
+}`
+	f := parseString(t, src)
+	if len(f.Blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(f.Blocks))
+	}
+	outer := f.Blocks[0]
+	if outer.Type != "policy" || outer.Label != "p1" {
+		t.Errorf("outer: expected policy/p1, got %s/%s", outer.Type, outer.Label)
+	}
+	if len(outer.Blocks) != 1 {
+		t.Fatalf("expected 1 nested block, got %d", len(outer.Blocks))
+	}
+	inner := outer.Blocks[0]
+	if inner.Type != "state" || inner.Label != "hot" {
+		t.Errorf("inner: expected state/hot, got %s/%s", inner.Type, inner.Label)
+	}
+	if len(inner.Attributes) != 1 {
+		t.Fatalf("expected 1 attribute, got %d", len(inner.Attributes))
+	}
+	if inner.Attributes[0].Key != "priority" {
+		t.Errorf("expected key %q, got %q", "priority", inner.Attributes[0].Key)
+	}
+}
+
+func TestParseNestedUnlabeledBlock(t *testing.T) {
+	src := `state "hot" {
+  transition {
+    dest = "warm"
+  }
+}`
+	f := parseString(t, src)
+	if len(f.Blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(f.Blocks))
+	}
+	outer := f.Blocks[0]
+	if len(outer.Blocks) != 1 {
+		t.Fatalf("expected 1 nested block, got %d", len(outer.Blocks))
+	}
+	inner := outer.Blocks[0]
+	if inner.Type != "transition" {
+		t.Errorf("expected type %q, got %q", "transition", inner.Type)
+	}
+	if inner.Label != "" {
+		t.Errorf("expected empty label, got %q", inner.Label)
+	}
+	if len(inner.Attributes) != 1 {
+		t.Fatalf("expected 1 attribute, got %d", len(inner.Attributes))
+	}
+	if inner.Attributes[0].Key != "dest" {
+		t.Errorf("expected key %q, got %q", "dest", inner.Attributes[0].Key)
+	}
+}
+
+func TestParseMixedAttrsAndBlocks(t *testing.T) {
+	src := `resource "db" {
+  host = "localhost"
+  replica {
+    host = "replica1"
+  }
+  port = 5432
+}`
+	f := parseString(t, src)
+	b := f.Blocks[0]
+	if len(b.Attributes) != 2 {
+		t.Fatalf("expected 2 attributes, got %d", len(b.Attributes))
+	}
+	if b.Attributes[0].Key != "host" {
+		t.Errorf("attr 0: expected %q, got %q", "host", b.Attributes[0].Key)
+	}
+	if b.Attributes[1].Key != "port" {
+		t.Errorf("attr 1: expected %q, got %q", "port", b.Attributes[1].Key)
+	}
+	if len(b.Blocks) != 1 {
+		t.Fatalf("expected 1 nested block, got %d", len(b.Blocks))
+	}
+	if b.Blocks[0].Type != "replica" {
+		t.Errorf("nested block: expected type %q, got %q", "replica", b.Blocks[0].Type)
+	}
+}
+
+func TestParseThreeLevelNesting(t *testing.T) {
+	src := `a {
+  b {
+    c {
+      x = 1
+    }
+  }
+}`
+	f := parseString(t, src)
+	if len(f.Blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(f.Blocks))
+	}
+	a := f.Blocks[0]
+	if a.Type != "a" {
+		t.Errorf("expected type %q, got %q", "a", a.Type)
+	}
+	if len(a.Blocks) != 1 {
+		t.Fatalf("a: expected 1 nested block, got %d", len(a.Blocks))
+	}
+	b := a.Blocks[0]
+	if b.Type != "b" {
+		t.Errorf("expected type %q, got %q", "b", b.Type)
+	}
+	if len(b.Blocks) != 1 {
+		t.Fatalf("b: expected 1 nested block, got %d", len(b.Blocks))
+	}
+	c := b.Blocks[0]
+	if c.Type != "c" {
+		t.Errorf("expected type %q, got %q", "c", c.Type)
+	}
+	if len(c.Attributes) != 1 {
+		t.Fatalf("c: expected 1 attribute, got %d", len(c.Attributes))
+	}
+	if c.Attributes[0].Key != "x" {
+		t.Errorf("expected key %q, got %q", "x", c.Attributes[0].Key)
+	}
+}
+
+func TestParseSiblingBlocks(t *testing.T) {
+	src := `outer {
+  a { }
+  b { }
+}`
+	f := parseString(t, src)
+	if len(f.Blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(f.Blocks))
+	}
+	outer := f.Blocks[0]
+	if len(outer.Blocks) != 2 {
+		t.Fatalf("expected 2 nested blocks, got %d", len(outer.Blocks))
+	}
+	if outer.Blocks[0].Type != "a" {
+		t.Errorf("block 0: expected type %q, got %q", "a", outer.Blocks[0].Type)
+	}
+	if outer.Blocks[1].Type != "b" {
+		t.Errorf("block 1: expected type %q, got %q", "b", outer.Blocks[1].Type)
+	}
+}
+
+func TestParseMapNotBlock(t *testing.T) {
+	src := `resource "r" {
+  config = { env = "prod" }
+}`
+	f := parseString(t, src)
+	b := f.Blocks[0]
+	if len(b.Blocks) != 0 {
+		t.Errorf("expected 0 nested blocks, got %d", len(b.Blocks))
+	}
+	if len(b.Attributes) != 1 {
+		t.Fatalf("expected 1 attribute, got %d", len(b.Attributes))
+	}
+	if _, ok := b.Attributes[0].Value.(*MapExpr); !ok {
+		t.Errorf("expected *MapExpr, got %T", b.Attributes[0].Value)
+	}
+}
+
+func TestParseFullISMStructure(t *testing.T) {
+	src := `policy "rollover" {
+  description = "Rollover and shrink"
+
+  state "hot" {
+    priority = 100
+    transition {
+      condition = "min_index_age"
+      value = "1d"
+      dest = "warm"
+    }
+  }
+
+  state "warm" {
+    priority = 50
+    actions {
+      shrink = true
+    }
+    transition {
+      condition = "min_index_age"
+      value = "30d"
+      dest = "delete"
+    }
+  }
+
+  state "delete" {
+    actions {
+      delete = true
+    }
+  }
+}`
+	f := parseString(t, src)
+	if len(f.Blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(f.Blocks))
+	}
+	policy := f.Blocks[0]
+	if policy.Type != "policy" || policy.Label != "rollover" {
+		t.Errorf("expected policy/rollover, got %s/%s", policy.Type, policy.Label)
+	}
+	if len(policy.Attributes) != 1 {
+		t.Errorf("expected 1 policy attribute, got %d", len(policy.Attributes))
+	}
+	if len(policy.Blocks) != 3 {
+		t.Fatalf("expected 3 state blocks, got %d", len(policy.Blocks))
+	}
+
+	// Validate state names.
+	wantStates := []string{"hot", "warm", "delete"}
+	for i, want := range wantStates {
+		if policy.Blocks[i].Type != "state" {
+			t.Errorf("block %d: expected type %q, got %q", i, "state", policy.Blocks[i].Type)
+		}
+		if policy.Blocks[i].Label != want {
+			t.Errorf("block %d: expected label %q, got %q", i, want, policy.Blocks[i].Label)
+		}
+	}
+
+	// Hot state: 1 attr (priority), 1 block (transition).
+	hot := policy.Blocks[0]
+	if len(hot.Attributes) != 1 {
+		t.Errorf("hot: expected 1 attribute, got %d", len(hot.Attributes))
+	}
+	if len(hot.Blocks) != 1 {
+		t.Fatalf("hot: expected 1 nested block, got %d", len(hot.Blocks))
+	}
+	if hot.Blocks[0].Type != "transition" {
+		t.Errorf("hot nested: expected type %q, got %q", "transition", hot.Blocks[0].Type)
+	}
+	if len(hot.Blocks[0].Attributes) != 3 {
+		t.Errorf("hot transition: expected 3 attributes, got %d", len(hot.Blocks[0].Attributes))
+	}
+
+	// Warm state: 1 attr, 2 blocks (actions + transition).
+	warm := policy.Blocks[1]
+	if len(warm.Attributes) != 1 {
+		t.Errorf("warm: expected 1 attribute, got %d", len(warm.Attributes))
+	}
+	if len(warm.Blocks) != 2 {
+		t.Fatalf("warm: expected 2 nested blocks, got %d", len(warm.Blocks))
+	}
+	if warm.Blocks[0].Type != "actions" {
+		t.Errorf("warm block 0: expected type %q, got %q", "actions", warm.Blocks[0].Type)
+	}
+	if warm.Blocks[1].Type != "transition" {
+		t.Errorf("warm block 1: expected type %q, got %q", "transition", warm.Blocks[1].Type)
+	}
+
+	// Delete state: 0 attrs, 1 block (actions).
+	del := policy.Blocks[2]
+	if len(del.Attributes) != 0 {
+		t.Errorf("delete: expected 0 attributes, got %d", len(del.Attributes))
+	}
+	if len(del.Blocks) != 1 {
+		t.Fatalf("delete: expected 1 nested block, got %d", len(del.Blocks))
+	}
+	if del.Blocks[0].Type != "actions" {
+		t.Errorf("delete block 0: expected type %q, got %q", "actions", del.Blocks[0].Type)
+	}
+}
+
 // containsSubstring checks if s contains substr.
 func containsSubstring(s, substr string) bool {
 	return len(s) >= len(substr) && searchSubstring(s, substr)
