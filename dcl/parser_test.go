@@ -819,3 +819,171 @@ func searchSubstring(s, substr string) bool {
 	}
 	return false
 }
+
+func TestParseBareIdentifier(t *testing.T) {
+	f := parseString(t, `resource "r" { context = prod_opensearch }`)
+	if len(f.Blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(f.Blocks))
+	}
+	attr := f.Blocks[0].Attributes[0]
+	ident, ok := attr.Value.(*Identifier)
+	if !ok {
+		t.Fatalf("expected *Identifier, got %T", attr.Value)
+	}
+	if ident.Name != "prod_opensearch" {
+		t.Errorf("expected Name %q, got %q", "prod_opensearch", ident.Name)
+	}
+}
+
+func TestParseTwoPartReference(t *testing.T) {
+	f := parseString(t, `role_mapping "rm" { role = opensearch_role.log_reader }`)
+	if len(f.Blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(f.Blocks))
+	}
+	attr := f.Blocks[0].Attributes[0]
+	ref, ok := attr.Value.(*Reference)
+	if !ok {
+		t.Fatalf("expected *Reference, got %T", attr.Value)
+	}
+	if len(ref.Parts) != 2 || ref.Parts[0] != "opensearch_role" || ref.Parts[1] != "log_reader" {
+		t.Errorf("expected [opensearch_role log_reader], got %v", ref.Parts)
+	}
+}
+
+func TestParseFourPartReference(t *testing.T) {
+	f := parseString(t, `resource "r" { path = a.b.c.d }`)
+	if len(f.Blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(f.Blocks))
+	}
+	attr := f.Blocks[0].Attributes[0]
+	ref, ok := attr.Value.(*Reference)
+	if !ok {
+		t.Fatalf("expected *Reference, got %T", attr.Value)
+	}
+	expected := []string{"a", "b", "c", "d"}
+	if len(ref.Parts) != len(expected) {
+		t.Fatalf("expected %d parts, got %d", len(expected), len(ref.Parts))
+	}
+	for i, p := range expected {
+		if ref.Parts[i] != p {
+			t.Errorf("part[%d]: expected %q, got %q", i, p, ref.Parts[i])
+		}
+	}
+}
+
+func TestParseReferenceInList(t *testing.T) {
+	f := parseString(t, `resource "r" { refs = [a.b, c] }`)
+	if len(f.Blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(f.Blocks))
+	}
+	attr := f.Blocks[0].Attributes[0]
+	list, ok := attr.Value.(*ListExpr)
+	if !ok {
+		t.Fatalf("expected *ListExpr, got %T", attr.Value)
+	}
+	if len(list.Elements) != 2 {
+		t.Fatalf("expected 2 elements, got %d", len(list.Elements))
+	}
+	ref, ok := list.Elements[0].(*Reference)
+	if !ok {
+		t.Fatalf("element[0]: expected *Reference, got %T", list.Elements[0])
+	}
+	if len(ref.Parts) != 2 || ref.Parts[0] != "a" || ref.Parts[1] != "b" {
+		t.Errorf("element[0]: expected [a b], got %v", ref.Parts)
+	}
+	ident, ok := list.Elements[1].(*Identifier)
+	if !ok {
+		t.Fatalf("element[1]: expected *Identifier, got %T", list.Elements[1])
+	}
+	if ident.Name != "c" {
+		t.Errorf("element[1]: expected %q, got %q", "c", ident.Name)
+	}
+}
+
+func TestParseTrailingDotError(t *testing.T) {
+	_, diags := Parse("test.dcl", []byte(`resource "r" { ref = foo. }`))
+	if !diags.HasErrors() {
+		t.Fatal("expected error for trailing dot")
+	}
+	found := false
+	for _, d := range diags {
+		if containsSubstring(d.Message, "expected identifier after '.'") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected error mentioning \"expected identifier after '.'\", got: %s", diags.Error())
+	}
+}
+
+func TestParseLeadingDotError(t *testing.T) {
+	_, diags := Parse("test.dcl", []byte(`resource "r" { ref = .foo }`))
+	if !diags.HasErrors() {
+		t.Fatal("expected error for leading dot")
+	}
+	found := false
+	for _, d := range diags {
+		if containsSubstring(d.Message, "expected value") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected error mentioning \"expected value\", got: %s", diags.Error())
+	}
+}
+
+func TestParseRoleMappingExample(t *testing.T) {
+	src := `
+role_mapping "readall" {
+  cluster_permissions = ["cluster_composite_ops_ro"]
+  index_permissions {
+    index_patterns  = ["*"]
+    allowed_actions = ["read"]
+  }
+  backend_roles = [opensearch_role.log_reader, "admin"]
+  description   = "read-only access"
+}
+`
+	f := parseString(t, src)
+	if len(f.Blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(f.Blocks))
+	}
+	b := f.Blocks[0]
+	if b.Type != "role_mapping" || b.Label != "readall" {
+		t.Errorf("unexpected block type/label: %s %q", b.Type, b.Label)
+	}
+
+	// Find backend_roles attribute
+	var backendRoles *ListExpr
+	for _, attr := range b.Attributes {
+		if attr.Key == "backend_roles" {
+			var ok bool
+			backendRoles, ok = attr.Value.(*ListExpr)
+			if !ok {
+				t.Fatalf("backend_roles: expected *ListExpr, got %T", attr.Value)
+			}
+		}
+	}
+	if backendRoles == nil {
+		t.Fatal("backend_roles attribute not found")
+	}
+	if len(backendRoles.Elements) != 2 {
+		t.Fatalf("expected 2 elements in backend_roles, got %d", len(backendRoles.Elements))
+	}
+	ref, ok := backendRoles.Elements[0].(*Reference)
+	if !ok {
+		t.Fatalf("element[0]: expected *Reference, got %T", backendRoles.Elements[0])
+	}
+	if len(ref.Parts) != 2 || ref.Parts[0] != "opensearch_role" || ref.Parts[1] != "log_reader" {
+		t.Errorf("element[0]: expected [opensearch_role log_reader], got %v", ref.Parts)
+	}
+	str, ok := backendRoles.Elements[1].(*LiteralString)
+	if !ok {
+		t.Fatalf("element[1]: expected *LiteralString, got %T", backendRoles.Elements[1])
+	}
+	if str.Value != "admin" {
+		t.Errorf("element[1]: expected %q, got %q", "admin", str.Value)
+	}
+}

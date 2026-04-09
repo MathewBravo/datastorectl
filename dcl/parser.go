@@ -329,6 +329,25 @@ func (p *parser) parseExpression() (Expression, bool) {
 			Rng:   Range{Start: tok.Pos, End: tokenEnd(tok)},
 		}, true
 
+	case TokenIdent:
+		parts := []string{tok.Literal}
+		end := tokenEnd(tok)
+		for p.peek.Type == TokenDot {
+			p.nextToken() // advance to dot
+			p.nextToken() // advance past dot
+			if p.cur.Type != TokenIdent {
+				p.addError(p.cur.Pos, fmt.Sprintf("expected identifier after '.', got %s", p.cur.Type))
+				return nil, false
+			}
+			parts = append(parts, p.cur.Literal)
+			end = tokenEnd(p.cur)
+		}
+		p.nextToken() // advance past last identifier
+		if len(parts) == 1 {
+			return &Identifier{Name: parts[0], Rng: Range{Start: tok.Pos, End: end}}, true
+		}
+		return &Reference{Parts: parts, Rng: Range{Start: tok.Pos, End: end}}, true
+
 	case TokenLBracket:
 		return p.parseList()
 
