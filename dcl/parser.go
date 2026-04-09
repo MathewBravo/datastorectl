@@ -6,6 +6,8 @@ import (
 	"strconv"
 )
 
+const maxErrors = 20
+
 // Parse parses DCL source into an AST File node.
 func Parse(filename string, src []byte) (*File, Diagnostics) {
 	lex := NewLexer(filename, src)
@@ -27,10 +29,12 @@ func Parse(filename string, src []byte) (*File, Diagnostics) {
 }
 
 type parser struct {
-	lex   *Lexer
-	cur   Token // current token
-	peek  Token // one-token lookahead
-	diags Diagnostics
+	lex           *Lexer
+	cur           Token // current token
+	peek          Token // one-token lookahead
+	diags         Diagnostics
+	errCount      int
+	tooManyErrors bool
 }
 
 // tokenEnd computes the end Pos from a token's start position and literal length.
@@ -88,11 +92,23 @@ func (p *parser) expect(typ TokenType) (Token, bool) {
 
 // addError appends an error diagnostic at the given position.
 func (p *parser) addError(pos Pos, msg string) {
+	if p.tooManyErrors {
+		return
+	}
 	p.diags = append(p.diags, Diagnostic{
 		Severity: SeverityError,
 		Message:  msg,
 		Range:    Range{Start: pos, End: pos},
 	})
+	p.errCount++
+	if p.errCount >= maxErrors {
+		p.tooManyErrors = true
+		p.diags = append(p.diags, Diagnostic{
+			Severity: SeverityError,
+			Message:  "too many errors",
+			Range:    Range{Start: pos, End: pos},
+		})
+	}
 }
 
 // --- error recovery ---
@@ -153,7 +169,7 @@ func (p *parser) parseFile() *File {
 	fileStart := p.cur.Pos
 	var blocks []Block
 
-	for {
+	for !p.tooManyErrors {
 		p.skipNewlines()
 
 		if p.cur.Type == TokenEOF {
@@ -201,13 +217,17 @@ func (p *parser) parseBlock() (Block, bool) {
 	// Expect opening brace.
 	if _, ok := p.expect(TokenLBrace); !ok {
 		p.recoverToNextStatement()
-		return Block{}, false
+		return Block{
+			Type:  typeToken.Literal,
+			Label: label,
+			Rng:   Range{Start: typeToken.Pos, End: p.cur.Pos},
+		}, true
 	}
 
 	var attrs []Attribute
 	var blocks []Block
 
-	for {
+	for !p.tooManyErrors {
 		p.skipNewlines()
 
 		if p.cur.Type == TokenRBrace || p.cur.Type == TokenEOF {
@@ -242,19 +262,28 @@ func (p *parser) parseBlock() (Block, bool) {
 		p.recoverToNextStatement()
 	}
 
-	// Consume closing brace.
-	rbrace, ok := p.expect(TokenRBrace)
-	if !ok {
-		p.recoverToBlockEnd()
-		return Block{}, false
+	if p.cur.Type == TokenRBrace {
+		rbrace := p.cur
+		p.nextToken()
+		return Block{
+			Type:       typeToken.Literal,
+			Label:      label,
+			Attributes: attrs,
+			Blocks:     blocks,
+			Rng:        Range{Start: typeToken.Pos, End: tokenEnd(rbrace)},
+		}, true
 	}
 
+	// Missing closing brace — return partial block with what we parsed.
+	p.addError(typeToken.Pos,
+		fmt.Sprintf("missing closing '}' for block %q", typeToken.Literal))
+	p.recoverToBlockEnd()
 	return Block{
 		Type:       typeToken.Literal,
 		Label:      label,
 		Attributes: attrs,
 		Blocks:     blocks,
-		Rng:        Range{Start: typeToken.Pos, End: tokenEnd(rbrace)},
+		Rng:        Range{Start: typeToken.Pos, End: p.cur.Pos},
 	}, true
 }
 
