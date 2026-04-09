@@ -343,6 +343,10 @@ func (p *parser) parseExpression() (Expression, bool) {
 			end = tokenEnd(p.cur)
 		}
 		p.nextToken() // advance past last identifier
+		// Function call: only for single-part identifiers followed by '('
+		if len(parts) == 1 && p.cur.Type == TokenLParen {
+			return p.parseFunctionCall(parts[0], tok.Pos)
+		}
 		if len(parts) == 1 {
 			return &Identifier{Name: parts[0], Rng: Range{Start: tok.Pos, End: end}}, true
 		}
@@ -434,6 +438,53 @@ func (p *parser) parseMap() (Expression, bool) {
 		Values: values,
 		Rng:    Range{Start: lbrace.Pos, End: tokenEnd(rbrace)},
 	}, true
+}
+
+// parseFunctionCall parses: name( arg, arg, ... )
+// The opening '(' is p.cur when called.
+func (p *parser) parseFunctionCall(name string, start Pos) (Expression, bool) {
+	p.nextToken() // consume '('
+	p.skipNewlines()
+
+	var args []Expression
+
+	// Empty arg list
+	if p.cur.Type == TokenRParen {
+		end := tokenEnd(p.cur)
+		p.nextToken() // consume ')'
+		return &FunctionCall{Name: name, Args: args, Rng: Range{Start: start, End: end}}, true
+	}
+
+	// Parse first argument
+	arg, ok := p.parseExpression()
+	if !ok {
+		return nil, false
+	}
+	args = append(args, arg)
+
+	// Parse remaining comma-separated arguments
+	for p.cur.Type == TokenComma {
+		p.nextToken() // consume ','
+		p.skipNewlines()
+		// Trailing comma: next token is ')'
+		if p.cur.Type == TokenRParen {
+			break
+		}
+		arg, ok = p.parseExpression()
+		if !ok {
+			return nil, false
+		}
+		args = append(args, arg)
+	}
+
+	p.skipNewlines()
+	if p.cur.Type != TokenRParen {
+		p.addError(p.cur.Pos, fmt.Sprintf("expected ',' or ')' in argument list, got %s", p.cur.Type))
+		return nil, false
+	}
+	end := tokenEnd(p.cur)
+	p.nextToken() // consume ')'
+	return &FunctionCall{Name: name, Args: args, Rng: Range{Start: start, End: end}}, true
 }
 
 // parseMapEntry parses a single: ident = expr

@@ -987,3 +987,165 @@ role_mapping "readall" {
 		t.Errorf("element[1]: expected %q, got %q", "admin", str.Value)
 	}
 }
+
+func TestParseFunctionCallTwoArgs(t *testing.T) {
+	f := parseString(t, `resource "r" { password = secret("env", "DB_PASS") }`)
+	if len(f.Blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(f.Blocks))
+	}
+	attr := f.Blocks[0].Attributes[0]
+	fc, ok := attr.Value.(*FunctionCall)
+	if !ok {
+		t.Fatalf("expected *FunctionCall, got %T", attr.Value)
+	}
+	if fc.Name != "secret" {
+		t.Errorf("expected Name %q, got %q", "secret", fc.Name)
+	}
+	if len(fc.Args) != 2 {
+		t.Fatalf("expected 2 args, got %d", len(fc.Args))
+	}
+	arg0, ok := fc.Args[0].(*LiteralString)
+	if !ok {
+		t.Fatalf("arg[0]: expected *LiteralString, got %T", fc.Args[0])
+	}
+	if arg0.Value != "env" {
+		t.Errorf("arg[0]: expected %q, got %q", "env", arg0.Value)
+	}
+	arg1, ok := fc.Args[1].(*LiteralString)
+	if !ok {
+		t.Fatalf("arg[1]: expected *LiteralString, got %T", fc.Args[1])
+	}
+	if arg1.Value != "DB_PASS" {
+		t.Errorf("arg[1]: expected %q, got %q", "DB_PASS", arg1.Value)
+	}
+}
+
+func TestParseFunctionCallSingleArg(t *testing.T) {
+	f := parseString(t, `resource "r" { age = min_index_age("7d") }`)
+	if len(f.Blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(f.Blocks))
+	}
+	attr := f.Blocks[0].Attributes[0]
+	fc, ok := attr.Value.(*FunctionCall)
+	if !ok {
+		t.Fatalf("expected *FunctionCall, got %T", attr.Value)
+	}
+	if fc.Name != "min_index_age" {
+		t.Errorf("expected Name %q, got %q", "min_index_age", fc.Name)
+	}
+	if len(fc.Args) != 1 {
+		t.Fatalf("expected 1 arg, got %d", len(fc.Args))
+	}
+	arg0, ok := fc.Args[0].(*LiteralString)
+	if !ok {
+		t.Fatalf("arg[0]: expected *LiteralString, got %T", fc.Args[0])
+	}
+	if arg0.Value != "7d" {
+		t.Errorf("arg[0]: expected %q, got %q", "7d", arg0.Value)
+	}
+}
+
+func TestParseFunctionCallEmpty(t *testing.T) {
+	f := parseString(t, `resource "r" { v = noop() }`)
+	if len(f.Blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(f.Blocks))
+	}
+	attr := f.Blocks[0].Attributes[0]
+	fc, ok := attr.Value.(*FunctionCall)
+	if !ok {
+		t.Fatalf("expected *FunctionCall, got %T", attr.Value)
+	}
+	if fc.Name != "noop" {
+		t.Errorf("expected Name %q, got %q", "noop", fc.Name)
+	}
+	if len(fc.Args) != 0 {
+		t.Errorf("expected 0 args, got %d", len(fc.Args))
+	}
+}
+
+func TestParseFunctionCallNested(t *testing.T) {
+	f := parseString(t, `resource "r" { v = outer(inner("x")) }`)
+	if len(f.Blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(f.Blocks))
+	}
+	attr := f.Blocks[0].Attributes[0]
+	fc, ok := attr.Value.(*FunctionCall)
+	if !ok {
+		t.Fatalf("expected *FunctionCall, got %T", attr.Value)
+	}
+	if fc.Name != "outer" {
+		t.Errorf("expected Name %q, got %q", "outer", fc.Name)
+	}
+	if len(fc.Args) != 1 {
+		t.Fatalf("expected 1 arg, got %d", len(fc.Args))
+	}
+	inner, ok := fc.Args[0].(*FunctionCall)
+	if !ok {
+		t.Fatalf("arg[0]: expected *FunctionCall, got %T", fc.Args[0])
+	}
+	if inner.Name != "inner" {
+		t.Errorf("inner: expected Name %q, got %q", "inner", inner.Name)
+	}
+	if len(inner.Args) != 1 {
+		t.Fatalf("inner: expected 1 arg, got %d", len(inner.Args))
+	}
+	s, ok := inner.Args[0].(*LiteralString)
+	if !ok {
+		t.Fatalf("inner arg[0]: expected *LiteralString, got %T", inner.Args[0])
+	}
+	if s.Value != "x" {
+		t.Errorf("inner arg[0]: expected %q, got %q", "x", s.Value)
+	}
+}
+
+func TestParseFunctionCallTrailingComma(t *testing.T) {
+	f := parseString(t, `resource "r" { v = f("a",) }`)
+	if len(f.Blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(f.Blocks))
+	}
+	attr := f.Blocks[0].Attributes[0]
+	fc, ok := attr.Value.(*FunctionCall)
+	if !ok {
+		t.Fatalf("expected *FunctionCall, got %T", attr.Value)
+	}
+	if fc.Name != "f" {
+		t.Errorf("expected Name %q, got %q", "f", fc.Name)
+	}
+	if len(fc.Args) != 1 {
+		t.Fatalf("expected 1 arg, got %d", len(fc.Args))
+	}
+}
+
+func TestParseFunctionCallUnterminated(t *testing.T) {
+	_, diags := Parse("test.dcl", []byte(`resource "r" { v = secret("x" }`))
+	if !diags.HasErrors() {
+		t.Fatal("expected error for unterminated function call")
+	}
+	found := false
+	for _, d := range diags {
+		if containsSubstring(d.Message, "expected ',' or ')'") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected error mentioning \"expected ',' or ')'\", got: %s", diags.Error())
+	}
+}
+
+func TestParseFunctionCallMissingComma(t *testing.T) {
+	_, diags := Parse("test.dcl", []byte(`resource "r" { v = secret("a" "b") }`))
+	if !diags.HasErrors() {
+		t.Fatal("expected error for missing comma in function call")
+	}
+	found := false
+	for _, d := range diags {
+		if containsSubstring(d.Message, "expected ',' or ')'") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected error mentioning \"expected ',' or ')'\", got: %s", diags.Error())
+	}
+}
