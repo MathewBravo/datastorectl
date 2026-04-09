@@ -312,6 +312,239 @@ func TestParseEmptyBlock(t *testing.T) {
 	}
 }
 
+func TestParseListSimple(t *testing.T) {
+	src := `resource "app" {
+  tags = ["a", "b", "c"]
+}`
+	f := parseString(t, src)
+	if len(f.Blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(f.Blocks))
+	}
+	attrs := f.Blocks[0].Attributes
+	if len(attrs) != 1 {
+		t.Fatalf("expected 1 attribute, got %d", len(attrs))
+	}
+	list, ok := attrs[0].Value.(*ListExpr)
+	if !ok {
+		t.Fatalf("expected *ListExpr, got %T", attrs[0].Value)
+	}
+	if len(list.Elements) != 3 {
+		t.Fatalf("expected 3 elements, got %d", len(list.Elements))
+	}
+	for i, want := range []string{"a", "b", "c"} {
+		lit, ok := list.Elements[i].(*LiteralString)
+		if !ok {
+			t.Errorf("element %d: expected *LiteralString, got %T", i, list.Elements[i])
+			continue
+		}
+		if lit.Value != want {
+			t.Errorf("element %d: expected %q, got %q", i, want, lit.Value)
+		}
+	}
+}
+
+func TestParseListEmpty(t *testing.T) {
+	src := `resource "app" {
+  tags = []
+}`
+	f := parseString(t, src)
+	attrs := f.Blocks[0].Attributes
+	list, ok := attrs[0].Value.(*ListExpr)
+	if !ok {
+		t.Fatalf("expected *ListExpr, got %T", attrs[0].Value)
+	}
+	if len(list.Elements) != 0 {
+		t.Errorf("expected 0 elements, got %d", len(list.Elements))
+	}
+}
+
+func TestParseListTrailingComma(t *testing.T) {
+	src := `resource "app" {
+  ports = [8080, 8443,]
+}`
+	f := parseString(t, src)
+	attrs := f.Blocks[0].Attributes
+	list, ok := attrs[0].Value.(*ListExpr)
+	if !ok {
+		t.Fatalf("expected *ListExpr, got %T", attrs[0].Value)
+	}
+	if len(list.Elements) != 2 {
+		t.Fatalf("expected 2 elements, got %d", len(list.Elements))
+	}
+	for i, want := range []int64{8080, 8443} {
+		lit, ok := list.Elements[i].(*LiteralInt)
+		if !ok {
+			t.Errorf("element %d: expected *LiteralInt, got %T", i, list.Elements[i])
+			continue
+		}
+		if lit.Value != want {
+			t.Errorf("element %d: expected %d, got %d", i, want, lit.Value)
+		}
+	}
+}
+
+func TestParseListMultiline(t *testing.T) {
+	src := "resource \"app\" {\n  ports = [\n    8080,\n    8443\n  ]\n}"
+	f := parseString(t, src)
+	attrs := f.Blocks[0].Attributes
+	list, ok := attrs[0].Value.(*ListExpr)
+	if !ok {
+		t.Fatalf("expected *ListExpr, got %T", attrs[0].Value)
+	}
+	if len(list.Elements) != 2 {
+		t.Errorf("expected 2 elements, got %d", len(list.Elements))
+	}
+}
+
+func TestParseMapSimple(t *testing.T) {
+	src := `resource "app" {
+  labels = { env = "prod", tier = "web" }
+}`
+	f := parseString(t, src)
+	attrs := f.Blocks[0].Attributes
+	m, ok := attrs[0].Value.(*MapExpr)
+	if !ok {
+		t.Fatalf("expected *MapExpr, got %T", attrs[0].Value)
+	}
+	if len(m.Keys) != 2 {
+		t.Fatalf("expected 2 keys, got %d", len(m.Keys))
+	}
+	wantKeys := []string{"env", "tier"}
+	wantVals := []string{"prod", "web"}
+	for i := range wantKeys {
+		if m.Keys[i] != wantKeys[i] {
+			t.Errorf("key %d: expected %q, got %q", i, wantKeys[i], m.Keys[i])
+		}
+		lit, ok := m.Values[i].(*LiteralString)
+		if !ok {
+			t.Errorf("value %d: expected *LiteralString, got %T", i, m.Values[i])
+			continue
+		}
+		if lit.Value != wantVals[i] {
+			t.Errorf("value %d: expected %q, got %q", i, wantVals[i], lit.Value)
+		}
+	}
+}
+
+func TestParseMapEmpty(t *testing.T) {
+	src := `resource "app" {
+  meta = {}
+}`
+	f := parseString(t, src)
+	attrs := f.Blocks[0].Attributes
+	m, ok := attrs[0].Value.(*MapExpr)
+	if !ok {
+		t.Fatalf("expected *MapExpr, got %T", attrs[0].Value)
+	}
+	if len(m.Keys) != 0 {
+		t.Errorf("expected 0 keys, got %d", len(m.Keys))
+	}
+}
+
+func TestParseMapMultilineTrailingComma(t *testing.T) {
+	src := "resource \"app\" {\n  labels = {\n    env = \"prod\",\n    tier = \"web\",\n  }\n}"
+	f := parseString(t, src)
+	attrs := f.Blocks[0].Attributes
+	m, ok := attrs[0].Value.(*MapExpr)
+	if !ok {
+		t.Fatalf("expected *MapExpr, got %T", attrs[0].Value)
+	}
+	if len(m.Keys) != 2 {
+		t.Errorf("expected 2 keys, got %d", len(m.Keys))
+	}
+}
+
+func TestParseNestedListOfMaps(t *testing.T) {
+	src := "resource \"app\" {\n  servers = [{ host = \"a\" }, { host = \"b\" }]\n}"
+	f := parseString(t, src)
+	attrs := f.Blocks[0].Attributes
+	list, ok := attrs[0].Value.(*ListExpr)
+	if !ok {
+		t.Fatalf("expected *ListExpr, got %T", attrs[0].Value)
+	}
+	if len(list.Elements) != 2 {
+		t.Fatalf("expected 2 elements, got %d", len(list.Elements))
+	}
+	for i, want := range []string{"a", "b"} {
+		m, ok := list.Elements[i].(*MapExpr)
+		if !ok {
+			t.Errorf("element %d: expected *MapExpr, got %T", i, list.Elements[i])
+			continue
+		}
+		if len(m.Keys) != 1 || m.Keys[0] != "host" {
+			t.Errorf("element %d: expected key 'host', got %v", i, m.Keys)
+			continue
+		}
+		lit, ok := m.Values[0].(*LiteralString)
+		if !ok {
+			t.Errorf("element %d: expected *LiteralString value, got %T", i, m.Values[0])
+			continue
+		}
+		if lit.Value != want {
+			t.Errorf("element %d: expected value %q, got %q", i, want, lit.Value)
+		}
+	}
+}
+
+func TestParseNestedMapOfLists(t *testing.T) {
+	src := "resource \"app\" {\n  config = { ports = [80], hosts = [\"a\"] }\n}"
+	f := parseString(t, src)
+	attrs := f.Blocks[0].Attributes
+	m, ok := attrs[0].Value.(*MapExpr)
+	if !ok {
+		t.Fatalf("expected *MapExpr, got %T", attrs[0].Value)
+	}
+	if len(m.Keys) != 2 {
+		t.Fatalf("expected 2 keys, got %d", len(m.Keys))
+	}
+	for i, key := range []string{"ports", "hosts"} {
+		if m.Keys[i] != key {
+			t.Errorf("key %d: expected %q, got %q", i, key, m.Keys[i])
+		}
+		if _, ok := m.Values[i].(*ListExpr); !ok {
+			t.Errorf("value %d: expected *ListExpr, got %T", i, m.Values[i])
+		}
+	}
+}
+
+func TestParseListUnterminated(t *testing.T) {
+	src := `resource "app" {
+  tags = ["a", "b"
+}`
+	_, diags := Parse("test.dcl", []byte(src))
+	if !diags.HasErrors() {
+		t.Fatal("expected errors, got none")
+	}
+	found := false
+	for _, d := range diags {
+		if d.Severity == SeverityError && containsSubstring(d.Message, "RBracket") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected diagnostic mentioning RBracket, got: %s", diags.Error())
+	}
+}
+
+func TestParseMapMissingEquals(t *testing.T) {
+	src := `resource "app" {
+  labels = { foo "bar" }
+}`
+	_, diags := Parse("test.dcl", []byte(src))
+	if !diags.HasErrors() {
+		t.Fatal("expected errors, got none")
+	}
+	found := false
+	for _, d := range diags {
+		if d.Severity == SeverityError && containsSubstring(d.Message, "Equals") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected diagnostic mentioning Equals, got: %s", diags.Error())
+	}
+}
+
 // containsSubstring checks if s contains substr.
 func containsSubstring(s, substr string) bool {
 	return len(s) >= len(substr) && searchSubstring(s, substr)

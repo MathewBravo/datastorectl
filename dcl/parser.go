@@ -127,6 +127,25 @@ func (p *parser) recoverToBlockEnd() {
 	}
 }
 
+// recoverToListEnd skips tokens until the matching closing bracket (tracking depth).
+func (p *parser) recoverToListEnd() {
+	depth := 1
+	for depth > 0 && p.cur.Type != TokenEOF {
+		if p.cur.Type == TokenLBracket {
+			depth++
+		} else if p.cur.Type == TokenRBracket {
+			depth--
+		}
+		if depth > 0 {
+			p.nextToken()
+		}
+	}
+	// Consume the closing bracket if present.
+	if p.cur.Type == TokenRBracket {
+		p.nextToken()
+	}
+}
+
 // --- parsing methods ---
 
 // parseFile parses the top-level structure: a sequence of blocks.
@@ -306,8 +325,113 @@ func (p *parser) parseExpression() (Expression, bool) {
 			Rng:   Range{Start: tok.Pos, End: tokenEnd(tok)},
 		}, true
 
+	case TokenLBracket:
+		return p.parseList()
+
+	case TokenLBrace:
+		return p.parseMap()
+
 	default:
 		p.addError(tok.Pos, fmt.Sprintf("expected value, got %s", tok.Type))
 		return nil, false
 	}
+}
+
+// parseList parses: [ elem, elem, ... ]
+func (p *parser) parseList() (Expression, bool) {
+	lbracket := p.cur
+	p.nextToken() // consume '['
+	p.skipNewlines()
+
+	var elems []Expression
+
+	for p.cur.Type != TokenRBracket && p.cur.Type != TokenRBrace && p.cur.Type != TokenEOF {
+		expr, ok := p.parseExpression()
+		if !ok {
+			p.recoverToListEnd()
+			return nil, false
+		}
+		elems = append(elems, expr)
+
+		p.skipNewlines()
+		if p.cur.Type == TokenComma {
+			p.nextToken() // consume ','
+			p.skipNewlines()
+			if p.cur.Type == TokenRBracket {
+				break // trailing comma
+			}
+		}
+	}
+
+	rbracket, ok := p.expect(TokenRBracket)
+	if !ok {
+		p.recoverToListEnd()
+		return nil, false
+	}
+
+	return &ListExpr{
+		Elements: elems,
+		Rng:      Range{Start: lbracket.Pos, End: tokenEnd(rbracket)},
+	}, true
+}
+
+// parseMap parses: { key = value, key = value, ... }
+func (p *parser) parseMap() (Expression, bool) {
+	lbrace := p.cur
+	p.nextToken() // consume '{'
+	p.skipNewlines()
+
+	var keys []string
+	var values []Expression
+
+	for p.cur.Type != TokenRBrace && p.cur.Type != TokenEOF {
+		if !p.parseMapEntry(&keys, &values) {
+			p.recoverToBlockEnd()
+			return nil, false
+		}
+
+		p.skipNewlines()
+		if p.cur.Type == TokenComma {
+			p.nextToken() // consume ','
+			p.skipNewlines()
+			if p.cur.Type == TokenRBrace {
+				break // trailing comma
+			}
+		}
+	}
+
+	rbrace, ok := p.expect(TokenRBrace)
+	if !ok {
+		p.recoverToBlockEnd()
+		return nil, false
+	}
+
+	return &MapExpr{
+		Keys:   keys,
+		Values: values,
+		Rng:    Range{Start: lbrace.Pos, End: tokenEnd(rbrace)},
+	}, true
+}
+
+// parseMapEntry parses a single: ident = expr
+func (p *parser) parseMapEntry(keys *[]string, values *[]Expression) bool {
+	if p.cur.Type != TokenIdent {
+		p.addError(p.cur.Pos, fmt.Sprintf("expected map key (identifier), got %s", p.cur.Type))
+		return false
+	}
+	key := p.cur.Literal
+	p.nextToken() // consume key
+
+	if _, ok := p.expect(TokenEquals); !ok {
+		return false
+	}
+
+	val, ok := p.parseExpression()
+	if !ok {
+		return false
+	}
+
+	*keys = append(*keys, key)
+	*values = append(*values, val)
+	return true
 }
