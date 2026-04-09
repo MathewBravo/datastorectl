@@ -205,6 +205,7 @@ func (p *parser) parseBlock() (Block, bool) {
 	}
 
 	var attrs []Attribute
+	var blocks []Block
 
 	for {
 		p.skipNewlines()
@@ -228,10 +229,12 @@ func (p *parser) parseBlock() (Block, bool) {
 			continue
 		}
 
-		// ident + peek string/{/ident looks like a nested block — not supported yet.
-		if p.peek.Type == TokenString || p.peek.Type == TokenLBrace || p.peek.Type == TokenIdent {
-			p.addError(p.cur.Pos, "nested blocks are not yet supported")
-			p.recoverToNextStatement()
+		// ident + peek string/{ → nested block (recursive).
+		if p.peek.Type == TokenString || p.peek.Type == TokenLBrace {
+			block, ok := p.parseBlock()
+			if ok {
+				blocks = append(blocks, block)
+			}
 			continue
 		}
 
@@ -250,6 +253,7 @@ func (p *parser) parseBlock() (Block, bool) {
 		Type:       typeToken.Literal,
 		Label:      label,
 		Attributes: attrs,
+		Blocks:     blocks,
 		Rng:        Range{Start: typeToken.Pos, End: tokenEnd(rbrace)},
 	}, true
 }
