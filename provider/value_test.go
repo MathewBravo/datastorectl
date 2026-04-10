@@ -17,6 +17,8 @@ func TestKindString(t *testing.T) {
 		{KindBool, "bool"},
 		{KindList, "list"},
 		{KindMap, "map"},
+		{KindReference, "reference"},
+		{KindFunctionCall, "function_call"},
 		{Kind(99), "Kind(99)"},
 	}
 	for _, tt := range tests {
@@ -41,6 +43,8 @@ func TestConstructors(t *testing.T) {
 		{"BoolVal", BoolVal(true), KindBool},
 		{"ListVal", ListVal([]Value{IntVal(1)}), KindList},
 		{"MapVal", MapVal(NewOrderedMap()), KindMap},
+		{"RefVal", RefVal([]string{"db", "host"}), KindReference},
+		{"FuncCallVal", FuncCallVal("secret", []Value{StringVal("env")}), KindFunctionCall},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -90,6 +94,21 @@ func TestConstructorValues(t *testing.T) {
 			t.Errorf("Map.Len() = %d, want 1", v.Map.Len())
 		}
 	})
+	t.Run("RefVal", func(t *testing.T) {
+		v := RefVal([]string{"db", "host"})
+		if len(v.Ref) != 2 || v.Ref[0] != "db" || v.Ref[1] != "host" {
+			t.Errorf("Ref = %v, want [db host]", v.Ref)
+		}
+	})
+	t.Run("FuncCallVal", func(t *testing.T) {
+		v := FuncCallVal("secret", []Value{StringVal("env"), StringVal("KEY")})
+		if v.FuncName != "secret" {
+			t.Errorf("FuncName = %q, want %q", v.FuncName, "secret")
+		}
+		if len(v.FuncArgs) != 2 {
+			t.Errorf("len(FuncArgs) = %d, want 2", len(v.FuncArgs))
+		}
+	})
 }
 
 func TestEqual(t *testing.T) {
@@ -123,6 +142,9 @@ func TestEqual(t *testing.T) {
 		{"list==list", ListVal([]Value{IntVal(1)}), ListVal([]Value{IntVal(1)}), true},
 		{"map==map", MapVal(m1), MapVal(m2), true},
 
+		{"ref==ref", RefVal([]string{"db", "host"}), RefVal([]string{"db", "host"}), true},
+		{"func==func", FuncCallVal("secret", []Value{StringVal("env")}), FuncCallVal("secret", []Value{StringVal("env")}), true},
+
 		// same kind, different value
 		{"str!=str", StringVal("a"), StringVal("b"), false},
 		{"int!=int", IntVal(1), IntVal(2), false},
@@ -132,6 +154,11 @@ func TestEqual(t *testing.T) {
 		{"list!=list_len", ListVal([]Value{IntVal(1)}), ListVal([]Value{IntVal(1), IntVal(2)}), false},
 		{"map!=map_val", MapVal(m1), MapVal(m4), false},
 		{"map!=map_order", MapVal(m1), MapVal(m3), false},
+		{"ref!=ref_parts", RefVal([]string{"db", "host"}), RefVal([]string{"db", "port"}), false},
+		{"ref!=ref_len", RefVal([]string{"db", "host"}), RefVal([]string{"db"}), false},
+		{"func!=func_name", FuncCallVal("secret", nil), FuncCallVal("env", nil), false},
+		{"func!=func_args", FuncCallVal("secret", []Value{StringVal("a")}), FuncCallVal("secret", []Value{StringVal("b")}), false},
+		{"func!=func_arglen", FuncCallVal("secret", []Value{StringVal("a")}), FuncCallVal("secret", nil), false},
 
 		// cross-kind mismatches
 		{"null!=str", NullVal(), StringVal(""), false},
@@ -139,6 +166,9 @@ func TestEqual(t *testing.T) {
 		{"str!=int", StringVal("1"), IntVal(1), false},
 		{"bool!=int", BoolVal(true), IntVal(1), false},
 		{"list!=map", ListVal(nil), MapVal(NewOrderedMap()), false},
+		{"ref!=str", RefVal([]string{"db"}), StringVal("db"), false},
+		{"func!=str", FuncCallVal("f", nil), StringVal("f"), false},
+		{"ref!=func", RefVal([]string{"f"}), FuncCallVal("f", nil), false},
 
 		// empty collections
 		{"empty_list==empty_list", ListVal(nil), ListVal([]Value{}), true},
@@ -178,6 +208,22 @@ func TestEqualNested(t *testing.T) {
 		}
 	})
 
+	t.Run("list_of_refs", func(t *testing.T) {
+		a := ListVal([]Value{RefVal([]string{"db", "host"})})
+		b := ListVal([]Value{RefVal([]string{"db", "host"})})
+		if !a.Equal(b) {
+			t.Error("expected equal")
+		}
+	})
+
+	t.Run("func_with_nested_ref", func(t *testing.T) {
+		a := FuncCallVal("secret", []Value{RefVal([]string{"db", "key"})})
+		b := FuncCallVal("secret", []Value{RefVal([]string{"db", "key"})})
+		if !a.Equal(b) {
+			t.Error("expected equal")
+		}
+	})
+
 	t.Run("deep_inequality", func(t *testing.T) {
 		m1 := NewOrderedMap()
 		m1.Set("items", ListVal([]Value{StringVal("a")}))
@@ -212,6 +258,12 @@ func TestValueString(t *testing.T) {
 		{"empty_list", ListVal(nil), "[]"},
 		{"map", MapVal(m), `{name: "db", port: 9200}`},
 		{"empty_map", MapVal(NewOrderedMap()), "{}"},
+		{"reference", RefVal([]string{"db", "host"}), "db.host"},
+		{"reference_single", RefVal([]string{"db"}), "db"},
+		{"reference_empty", RefVal(nil), ""},
+		{"function_call", FuncCallVal("secret", []Value{StringVal("env"), StringVal("DB_PASS")}), `secret("env", "DB_PASS")`},
+		{"function_call_no_args", FuncCallVal("now", nil), "now()"},
+		{"function_call_nested_ref", FuncCallVal("secret", []Value{StringVal("env"), RefVal([]string{"db", "key"})}), `secret("env", db.key)`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -220,6 +272,25 @@ func TestValueString(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestClonePlaceholders(t *testing.T) {
+	t.Run("reference_clone_is_independent", func(t *testing.T) {
+		orig := RefVal([]string{"db", "host"})
+		clone := orig.Clone()
+		clone.Ref[1] = "port"
+		if orig.Ref[1] != "host" {
+			t.Error("mutating clone's Ref corrupted original")
+		}
+	})
+	t.Run("function_call_clone_is_independent", func(t *testing.T) {
+		orig := FuncCallVal("secret", []Value{StringVal("env"), StringVal("KEY")})
+		clone := orig.Clone()
+		clone.FuncArgs[1] = StringVal("CHANGED")
+		if orig.FuncArgs[1].Str != "KEY" {
+			t.Error("mutating clone's FuncArgs corrupted original")
+		}
+	})
 }
 
 func TestZeroValueIsNull(t *testing.T) {

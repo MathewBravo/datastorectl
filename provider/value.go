@@ -1,6 +1,9 @@
 package provider
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Kind classifies the type of a Value.
 type Kind int
@@ -13,6 +16,8 @@ const (
 	KindBool               // bool
 	KindList               // []Value
 	KindMap                // *OrderedMap
+	KindReference          // unresolved cross-resource reference
+	KindFunctionCall       // unresolved function call (e.g. secret())
 )
 
 func (k Kind) String() string {
@@ -31,6 +36,10 @@ func (k Kind) String() string {
 		return "list"
 	case KindMap:
 		return "map"
+	case KindReference:
+		return "reference"
+	case KindFunctionCall:
+		return "function_call"
 	default:
 		return fmt.Sprintf("Kind(%d)", int(k))
 	}
@@ -45,8 +54,11 @@ type Value struct {
 	Int   int64
 	Float float64
 	Bool  bool
-	List  []Value
-	Map   *OrderedMap
+	List     []Value
+	Map      *OrderedMap
+	Ref      []string // KindReference: dotted path parts (e.g. ["db", "host"])
+	FuncName string   // KindFunctionCall: function name (e.g. "secret")
+	FuncArgs []Value  // KindFunctionCall: argument values
 }
 
 // NullVal returns a null Value.
@@ -84,6 +96,16 @@ func MapVal(m *OrderedMap) Value {
 	return Value{Kind: KindMap, Map: m}
 }
 
+// RefVal returns a reference Value with the given path parts.
+func RefVal(parts []string) Value {
+	return Value{Kind: KindReference, Ref: parts}
+}
+
+// FuncCallVal returns a function call Value with the given name and arguments.
+func FuncCallVal(name string, args []Value) Value {
+	return Value{Kind: KindFunctionCall, FuncName: name, FuncArgs: args}
+}
+
 // Equal reports whether v and other hold the same kind and value.
 // Map equality is order-sensitive.
 func (v Value) Equal(other Value) bool {
@@ -113,6 +135,29 @@ func (v Value) Equal(other Value) bool {
 		return true
 	case KindMap:
 		return v.Map.Equal(other.Map)
+	case KindReference:
+		if len(v.Ref) != len(other.Ref) {
+			return false
+		}
+		for i := range v.Ref {
+			if v.Ref[i] != other.Ref[i] {
+				return false
+			}
+		}
+		return true
+	case KindFunctionCall:
+		if v.FuncName != other.FuncName {
+			return false
+		}
+		if len(v.FuncArgs) != len(other.FuncArgs) {
+			return false
+		}
+		for i := range v.FuncArgs {
+			if !v.FuncArgs[i].Equal(other.FuncArgs[i]) {
+				return false
+			}
+		}
+		return true
 	default:
 		return false
 	}
@@ -129,6 +174,16 @@ func (v Value) Clone() Value {
 		return Value{Kind: KindList, List: elems}
 	case KindMap:
 		return Value{Kind: KindMap, Map: v.Map.Clone()}
+	case KindReference:
+		ref := make([]string, len(v.Ref))
+		copy(ref, v.Ref)
+		return Value{Kind: KindReference, Ref: ref}
+	case KindFunctionCall:
+		args := make([]Value, len(v.FuncArgs))
+		for i, a := range v.FuncArgs {
+			args[i] = a.Clone()
+		}
+		return Value{Kind: KindFunctionCall, FuncName: v.FuncName, FuncArgs: args}
 	default:
 		return v
 	}
@@ -166,6 +221,18 @@ func (v Value) String() string {
 			s += v.Map.keys[i] + ": " + v.Map.values[i].String()
 		}
 		s += "}"
+		return s
+	case KindReference:
+		return strings.Join(v.Ref, ".")
+	case KindFunctionCall:
+		s := v.FuncName + "("
+		for i, arg := range v.FuncArgs {
+			if i > 0 {
+				s += ", "
+			}
+			s += arg.String()
+		}
+		s += ")"
 		return s
 	default:
 		return fmt.Sprintf("<unknown kind %d>", int(v.Kind))
