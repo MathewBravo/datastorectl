@@ -112,22 +112,25 @@ func (v Value) Equal(other Value) bool {
 		}
 		return true
 	case KindMap:
-		vLen := v.Map.Len()
-		oLen := other.Map.Len()
-		if vLen != oLen {
-			return false
-		}
-		for i := 0; i < vLen; i++ {
-			if v.Map.keys[i] != other.Map.keys[i] {
-				return false
-			}
-			if !v.Map.values[i].Equal(other.Map.values[i]) {
-				return false
-			}
-		}
-		return true
+		return v.Map.Equal(other.Map)
 	default:
 		return false
+	}
+}
+
+// Clone returns a deep copy of the Value.
+func (v Value) Clone() Value {
+	switch v.Kind {
+	case KindList:
+		elems := make([]Value, len(v.List))
+		for i, e := range v.List {
+			elems[i] = e.Clone()
+		}
+		return Value{Kind: KindList, List: elems}
+	case KindMap:
+		return Value{Kind: KindMap, Map: v.Map.Clone()}
+	default:
+		return v
 	}
 }
 
