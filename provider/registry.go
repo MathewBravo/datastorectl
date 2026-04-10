@@ -6,17 +6,17 @@ import (
 	"sync"
 )
 
-// Factory is a function that creates a new Provider instance.
-type Factory func() Provider
+// ProviderFunc is a function that creates a new Provider instance.
+type ProviderFunc func() Provider
 
 var (
 	registryMu sync.RWMutex
-	registry   = make(map[string]Factory)
+	registry   = make(map[string]ProviderFunc)
 )
 
 // Register makes a provider factory available by the provided name.
 // It panics if called twice with the same name (a programming error).
-func Register(name string, f Factory) {
+func Register(name string, f ProviderFunc) {
 	registryMu.Lock()
 	defer registryMu.Unlock()
 	if _, dup := registry[name]; dup {
@@ -26,7 +26,7 @@ func Register(name string, f Factory) {
 }
 
 // Lookup returns the factory registered under the given name.
-func Lookup(name string) (Factory, bool) {
+func Lookup(name string) (ProviderFunc, bool) {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
 	f, ok := registry[name]

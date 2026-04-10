@@ -12,7 +12,7 @@ import (
 func resetRegistry() {
 	registryMu.Lock()
 	defer registryMu.Unlock()
-	registry = make(map[string]Factory)
+	registry = make(map[string]ProviderFunc)
 }
 
 // stubProvider satisfies the Provider interface with no-op methods.
