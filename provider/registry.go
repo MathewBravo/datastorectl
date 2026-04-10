@@ -14,7 +14,7 @@ var (
 	registry   = make(map[string]ProviderFunc)
 )
 
-// Register makes a provider factory available by the provided name.
+// Register adds a ProviderFunc to the registry under the given name.
 // It panics if called twice with the same name (a programming error).
 func Register(name string, f ProviderFunc) {
 	registryMu.Lock()
@@ -25,7 +25,7 @@ func Register(name string, f ProviderFunc) {
 	registry[name] = f
 }
 
-// Lookup returns the factory registered under the given name.
+// Lookup returns the ProviderFunc registered under the given name.
 func Lookup(name string) (ProviderFunc, bool) {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
