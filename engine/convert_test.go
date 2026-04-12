@@ -8,6 +8,316 @@ import (
 	"github.com/MathewBravo/datastorectl/provider"
 )
 
+// --- ConvertFile tests ---
+
+func TestConvertFile_Basic(t *testing.T) {
+	t.Run("single_block", func(t *testing.T) {
+		file := &dcl.File{
+			Blocks: []dcl.Block{
+				{
+					Type:  "index",
+					Label: "logs",
+					Attributes: []dcl.Attribute{
+						{Key: "replicas", Value: &dcl.LiteralInt{Value: 1}},
+					},
+				},
+			},
+		}
+		rs, err := ConvertFile(file)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(rs.Resources) != 1 {
+			t.Fatalf("len(Resources) = %d, want 1", len(rs.Resources))
+		}
+		r := rs.Resources[0]
+		if r.ID.Type != "index" || r.ID.Name != "logs" {
+			t.Errorf("ID = %v, want {index, logs}", r.ID)
+		}
+		wantBody := provider.NewOrderedMap()
+		wantBody.Set("replicas", provider.IntVal(1))
+		if !r.Body.Equal(wantBody) {
+			t.Errorf("Body mismatch")
+		}
+	})
+
+	t.Run("multiple_blocks", func(t *testing.T) {
+		file := &dcl.File{
+			Blocks: []dcl.Block{
+				{Type: "index", Label: "logs"},
+				{Type: "template", Label: "t1"},
+				{Type: "policy", Label: "p1"},
+			},
+		}
+		rs, err := ConvertFile(file)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(rs.Resources) != 3 {
+			t.Fatalf("len(Resources) = %d, want 3", len(rs.Resources))
+		}
+		wantIDs := []provider.ResourceID{
+			{Type: "index", Name: "logs"},
+			{Type: "template", Name: "t1"},
+			{Type: "policy", Name: "p1"},
+		}
+		for i, want := range wantIDs {
+			if rs.Resources[i].ID != want {
+				t.Errorf("Resources[%d].ID = %v, want %v", i, rs.Resources[i].ID, want)
+			}
+		}
+	})
+
+	t.Run("empty_blocks", func(t *testing.T) {
+		file := &dcl.File{Blocks: nil}
+		rs, err := ConvertFile(file)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if rs == nil {
+			t.Fatal("expected non-nil ResourceSet")
+		}
+		if len(rs.Resources) != 0 {
+			t.Errorf("len(Resources) = %d, want 0", len(rs.Resources))
+		}
+	})
+
+	t.Run("preserves_order", func(t *testing.T) {
+		file := &dcl.File{
+			Blocks: []dcl.Block{
+				{Type: "c_type", Label: "third"},
+				{Type: "a_type", Label: "first"},
+				{Type: "b_type", Label: "second"},
+			},
+		}
+		rs, err := ConvertFile(file)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(rs.Resources) != 3 {
+			t.Fatalf("len(Resources) = %d, want 3", len(rs.Resources))
+		}
+		if rs.Resources[0].ID.Type != "c_type" {
+			t.Errorf("Resources[0].ID.Type = %q, want %q", rs.Resources[0].ID.Type, "c_type")
+		}
+		if rs.Resources[1].ID.Type != "a_type" {
+			t.Errorf("Resources[1].ID.Type = %q, want %q", rs.Resources[1].ID.Type, "a_type")
+		}
+		if rs.Resources[2].ID.Type != "b_type" {
+			t.Errorf("Resources[2].ID.Type = %q, want %q", rs.Resources[2].ID.Type, "b_type")
+		}
+	})
+}
+
+func TestConvertFile_Duplicates(t *testing.T) {
+	t.Run("exact_duplicate", func(t *testing.T) {
+		file := &dcl.File{
+			Blocks: []dcl.Block{
+				{Type: "index", Label: "logs"},
+				{Type: "index", Label: "logs"},
+			},
+		}
+		_, err := ConvertFile(file)
+		if err == nil {
+			t.Fatal("expected error for duplicate resource")
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "duplicate resource") {
+			t.Errorf("error = %q, want it to contain %q", msg, "duplicate resource")
+		}
+		if !strings.Contains(msg, "index.logs") {
+			t.Errorf("error = %q, want it to contain %q", msg, "index.logs")
+		}
+	})
+
+	t.Run("same_type_different_name", func(t *testing.T) {
+		file := &dcl.File{
+			Blocks: []dcl.Block{
+				{Type: "index", Label: "a"},
+				{Type: "index", Label: "b"},
+			},
+		}
+		rs, err := ConvertFile(file)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(rs.Resources) != 2 {
+			t.Errorf("len(Resources) = %d, want 2", len(rs.Resources))
+		}
+	})
+
+	t.Run("different_type_same_name", func(t *testing.T) {
+		file := &dcl.File{
+			Blocks: []dcl.Block{
+				{Type: "index", Label: "logs"},
+				{Type: "template", Label: "logs"},
+			},
+		}
+		rs, err := ConvertFile(file)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(rs.Resources) != 2 {
+			t.Errorf("len(Resources) = %d, want 2", len(rs.Resources))
+		}
+	})
+
+	t.Run("duplicate_among_many", func(t *testing.T) {
+		file := &dcl.File{
+			Blocks: []dcl.Block{
+				{Type: "index", Label: "logs"},
+				{Type: "template", Label: "t1"},
+				{Type: "policy", Label: "p1"},
+				{Type: "index", Label: "logs"},
+				{Type: "config", Label: "c1"},
+			},
+		}
+		_, err := ConvertFile(file)
+		if err == nil {
+			t.Fatal("expected error for duplicate resource")
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "duplicate resource") {
+			t.Errorf("error = %q, want it to contain %q", msg, "duplicate resource")
+		}
+	})
+}
+
+func TestConvertFile_Errors(t *testing.T) {
+	t.Run("nil_file", func(t *testing.T) {
+		_, err := ConvertFile(nil)
+		if err == nil {
+			t.Fatal("expected error for nil file")
+		}
+		if !strings.Contains(err.Error(), "nil file") {
+			t.Errorf("error = %q, want it to contain %q", err.Error(), "nil file")
+		}
+	})
+
+	t.Run("file_with_parse_errors", func(t *testing.T) {
+		file := &dcl.File{
+			Diagnostics: dcl.Diagnostics{
+				{Severity: dcl.SeverityError, Message: "unexpected token"},
+			},
+		}
+		_, err := ConvertFile(file)
+		if err == nil {
+			t.Fatal("expected error for file with parse errors")
+		}
+		if !strings.Contains(err.Error(), "parse errors") {
+			t.Errorf("error = %q, want it to contain %q", err.Error(), "parse errors")
+		}
+	})
+
+	t.Run("warnings_only_allowed", func(t *testing.T) {
+		file := &dcl.File{
+			Diagnostics: dcl.Diagnostics{
+				{Severity: dcl.SeverityWarning, Message: "deprecated syntax"},
+			},
+			Blocks: []dcl.Block{
+				{Type: "index", Label: "logs"},
+			},
+		}
+		rs, err := ConvertFile(file)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(rs.Resources) != 1 {
+			t.Errorf("len(Resources) = %d, want 1", len(rs.Resources))
+		}
+	})
+
+	t.Run("block_conversion_error", func(t *testing.T) {
+		file := &dcl.File{
+			Blocks: []dcl.Block{
+				{
+					Type:  "index",
+					Label: "bad",
+					Attributes: []dcl.Attribute{
+						{Key: "broken", Value: nil},
+					},
+				},
+			},
+		}
+		_, err := ConvertFile(file)
+		if err == nil {
+			t.Fatal("expected error for block conversion failure")
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "block 0") {
+			t.Errorf("error = %q, want it to contain %q", msg, "block 0")
+		}
+	})
+}
+
+func TestConvertFile_Fidelity(t *testing.T) {
+	t.Run("bodies_converted", func(t *testing.T) {
+		file := &dcl.File{
+			Blocks: []dcl.Block{
+				{
+					Type:  "index",
+					Label: "logs",
+					Attributes: []dcl.Attribute{
+						{Key: "replicas", Value: &dcl.LiteralInt{Value: 3}},
+						{Key: "shards", Value: &dcl.LiteralInt{Value: 5}},
+					},
+				},
+				{
+					Type:  "template",
+					Label: "t1",
+					Attributes: []dcl.Attribute{
+						{Key: "pattern", Value: &dcl.LiteralString{Value: "logs-*"}},
+					},
+				},
+			},
+		}
+		rs, err := ConvertFile(file)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		wantBody0 := provider.NewOrderedMap()
+		wantBody0.Set("replicas", provider.IntVal(3))
+		wantBody0.Set("shards", provider.IntVal(5))
+		if !rs.Resources[0].Body.Equal(wantBody0) {
+			t.Errorf("Resources[0].Body mismatch")
+		}
+
+		wantBody1 := provider.NewOrderedMap()
+		wantBody1.Set("pattern", provider.StringVal("logs-*"))
+		if !rs.Resources[1].Body.Equal(wantBody1) {
+			t.Errorf("Resources[1].Body mismatch")
+		}
+	})
+
+	t.Run("source_ranges_preserved", func(t *testing.T) {
+		rng0 := dcl.Range{
+			Start: dcl.Pos{Filename: "a.dcl", Line: 1, Column: 1},
+			End:   dcl.Pos{Filename: "a.dcl", Line: 3, Column: 2},
+		}
+		rng1 := dcl.Range{
+			Start: dcl.Pos{Filename: "a.dcl", Line: 5, Column: 1},
+			End:   dcl.Pos{Filename: "a.dcl", Line: 8, Column: 2},
+		}
+		file := &dcl.File{
+			Blocks: []dcl.Block{
+				{Type: "index", Label: "a", Rng: rng0},
+				{Type: "index", Label: "b", Rng: rng1},
+			},
+		}
+		rs, err := ConvertFile(file)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if rs.Resources[0].SourceRange != rng0 {
+			t.Errorf("Resources[0].SourceRange = %v, want %v", rs.Resources[0].SourceRange, rng0)
+		}
+		if rs.Resources[1].SourceRange != rng1 {
+			t.Errorf("Resources[1].SourceRange = %v, want %v", rs.Resources[1].SourceRange, rng1)
+		}
+	})
+}
+
 func TestExprToValue_Literals(t *testing.T) {
 	tests := []struct {
 		name string
