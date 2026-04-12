@@ -71,3 +71,87 @@ func exprToValue(expr dcl.Expression) (provider.Value, error) {
 		return provider.Value{}, fmt.Errorf("unsupported expression type %T", expr)
 	}
 }
+
+// blockToResource converts a top-level DCL Block into a provider Resource.
+// Block.Type → ResourceID.Type, Block.Label → ResourceID.Name.
+func blockToResource(block dcl.Block) (provider.Resource, error) {
+	body, err := convertBody(block.Attributes, block.Blocks)
+	if err != nil {
+		return provider.Resource{}, err
+	}
+	return provider.Resource{
+		ID:          provider.ResourceID{Type: block.Type, Name: block.Label},
+		Body:        body,
+		SourceRange: block.Rng,
+	}, nil
+}
+
+// convertBody converts a block's attributes and nested blocks into an OrderedMap.
+// Attributes are converted via exprToValue. Nested blocks are grouped by type:
+// single-occurrence types become a MapVal, multi-occurrence become a ListVal.
+func convertBody(attrs []dcl.Attribute, blocks []dcl.Block) (*provider.OrderedMap, error) {
+	m := provider.NewOrderedMap()
+
+	// Attributes first.
+	for _, attr := range attrs {
+		v, err := exprToValue(attr.Value)
+		if err != nil {
+			return nil, fmt.Errorf("attribute %q: %w", attr.Key, err)
+		}
+		m.Set(attr.Key, v)
+	}
+
+	// Group nested blocks by type, preserving first-occurrence order.
+	type blockGroup struct {
+		typ    string
+		blocks []dcl.Block
+	}
+	var groups []blockGroup
+	idx := map[string]int{} // type → index into groups
+	for _, b := range blocks {
+		if i, ok := idx[b.Type]; ok {
+			groups[i].blocks = append(groups[i].blocks, b)
+		} else {
+			idx[b.Type] = len(groups)
+			groups = append(groups, blockGroup{typ: b.Type, blocks: []dcl.Block{b}})
+		}
+	}
+
+	// Convert each group.
+	for _, g := range groups {
+		if len(g.blocks) == 1 {
+			nested, err := convertNestedBlock(g.blocks[0])
+			if err != nil {
+				return nil, fmt.Errorf("block %q: %w", g.typ, err)
+			}
+			m.Set(g.typ, provider.MapVal(nested))
+		} else {
+			elems := make([]provider.Value, len(g.blocks))
+			for i, b := range g.blocks {
+				nested, err := convertNestedBlock(b)
+				if err != nil {
+					return nil, fmt.Errorf("block %q[%d]: %w", g.typ, i, err)
+				}
+				elems[i] = provider.MapVal(nested)
+			}
+			m.Set(g.typ, provider.ListVal(elems))
+		}
+	}
+
+	return m, nil
+}
+
+// convertNestedBlock converts a single nested block's content into an OrderedMap.
+// If the block has a label, the result is wrapped: label becomes the key.
+func convertNestedBlock(block dcl.Block) (*provider.OrderedMap, error) {
+	inner, err := convertBody(block.Attributes, block.Blocks)
+	if err != nil {
+		return nil, err
+	}
+	if block.Label != "" {
+		outer := provider.NewOrderedMap()
+		outer.Set(block.Label, provider.MapVal(inner))
+		return outer, nil
+	}
+	return inner, nil
+}
