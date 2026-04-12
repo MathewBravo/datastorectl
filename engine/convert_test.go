@@ -398,3 +398,525 @@ func TestExprToValue_Errors(t *testing.T) {
 		}
 	})
 }
+
+// --- blockToResource tests ---
+
+func TestBlockToResource_Basic(t *testing.T) {
+	t.Run("attributes_only", func(t *testing.T) {
+		rng := dcl.Range{Start: dcl.Pos{Filename: "test.dcl", Line: 1, Column: 1}, End: dcl.Pos{Filename: "test.dcl", Line: 3, Column: 2}}
+		block := dcl.Block{
+			Type:  "index",
+			Label: "logs",
+			Attributes: []dcl.Attribute{
+				{Key: "replicas", Value: &dcl.LiteralInt{Value: 1}},
+				{Key: "shards", Value: &dcl.LiteralInt{Value: 3}},
+			},
+			Rng: rng,
+		}
+
+		got, err := blockToResource(block)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got.ID.Type != "index" || got.ID.Name != "logs" {
+			t.Errorf("ID = %v, want {index, logs}", got.ID)
+		}
+		if got.SourceRange != rng {
+			t.Errorf("SourceRange = %v, want %v", got.SourceRange, rng)
+		}
+
+		wantBody := provider.NewOrderedMap()
+		wantBody.Set("replicas", provider.IntVal(1))
+		wantBody.Set("shards", provider.IntVal(3))
+		if !got.Body.Equal(wantBody) {
+			t.Errorf("Body mismatch")
+		}
+		// Verify insertion order.
+		keys := got.Body.Keys()
+		if len(keys) != 2 || keys[0] != "replicas" || keys[1] != "shards" {
+			t.Errorf("keys = %v, want [replicas shards]", keys)
+		}
+	})
+
+	t.Run("empty_block", func(t *testing.T) {
+		block := dcl.Block{Type: "template", Label: "t1"}
+
+		got, err := blockToResource(block)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got.ID.Type != "template" || got.ID.Name != "t1" {
+			t.Errorf("ID = %v, want {template, t1}", got.ID)
+		}
+		if got.Body == nil {
+			t.Fatal("Body should be non-nil")
+		}
+		if got.Body.Len() != 0 {
+			t.Errorf("Body.Len() = %d, want 0", got.Body.Len())
+		}
+	})
+
+	t.Run("multiple_attribute_types", func(t *testing.T) {
+		block := dcl.Block{
+			Type:  "config",
+			Label: "main",
+			Attributes: []dcl.Attribute{
+				{Key: "name", Value: &dcl.LiteralString{Value: "primary"}},
+				{Key: "port", Value: &dcl.LiteralInt{Value: 9200}},
+				{Key: "enabled", Value: &dcl.LiteralBool{Value: true}},
+			},
+		}
+
+		got, err := blockToResource(block)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		wantBody := provider.NewOrderedMap()
+		wantBody.Set("name", provider.StringVal("primary"))
+		wantBody.Set("port", provider.IntVal(9200))
+		wantBody.Set("enabled", provider.BoolVal(true))
+		if !got.Body.Equal(wantBody) {
+			t.Errorf("Body mismatch")
+		}
+	})
+}
+
+func TestBlockToResource_NestedBlocks(t *testing.T) {
+	t.Run("single_unlabeled", func(t *testing.T) {
+		block := dcl.Block{
+			Type:  "policy",
+			Label: "p",
+			Blocks: []dcl.Block{
+				{
+					Type: "actions",
+					Attributes: []dcl.Attribute{
+						{Key: "delete", Value: &dcl.LiteralBool{Value: true}},
+					},
+				},
+			},
+		}
+
+		got, err := blockToResource(block)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		actionsInner := provider.NewOrderedMap()
+		actionsInner.Set("delete", provider.BoolVal(true))
+		wantBody := provider.NewOrderedMap()
+		wantBody.Set("actions", provider.MapVal(actionsInner))
+		if !got.Body.Equal(wantBody) {
+			t.Errorf("Body mismatch")
+		}
+	})
+
+	t.Run("single_labeled", func(t *testing.T) {
+		block := dcl.Block{
+			Type:  "policy",
+			Label: "p",
+			Blocks: []dcl.Block{
+				{
+					Type:  "state",
+					Label: "hot",
+					Attributes: []dcl.Attribute{
+						{Key: "priority", Value: &dcl.LiteralInt{Value: 100}},
+					},
+				},
+			},
+		}
+
+		got, err := blockToResource(block)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// "state" → MapVal({"hot": MapVal({priority: 100})})
+		priorityMap := provider.NewOrderedMap()
+		priorityMap.Set("priority", provider.IntVal(100))
+		hotWrapper := provider.NewOrderedMap()
+		hotWrapper.Set("hot", provider.MapVal(priorityMap))
+		wantBody := provider.NewOrderedMap()
+		wantBody.Set("state", provider.MapVal(hotWrapper))
+		if !got.Body.Equal(wantBody) {
+			t.Errorf("Body mismatch")
+		}
+	})
+
+	t.Run("multiple_same_type", func(t *testing.T) {
+		block := dcl.Block{
+			Type:  "policy",
+			Label: "lifecycle",
+			Blocks: []dcl.Block{
+				{
+					Type:  "state",
+					Label: "hot",
+					Attributes: []dcl.Attribute{
+						{Key: "priority", Value: &dcl.LiteralInt{Value: 100}},
+					},
+				},
+				{
+					Type:  "state",
+					Label: "warm",
+					Attributes: []dcl.Attribute{
+						{Key: "priority", Value: &dcl.LiteralInt{Value: 50}},
+					},
+				},
+				{
+					Type:  "state",
+					Label: "delete",
+					Attributes: []dcl.Attribute{
+						{Key: "priority", Value: &dcl.LiteralInt{Value: 0}},
+					},
+				},
+			},
+		}
+
+		got, err := blockToResource(block)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// "state" → ListVal of 3 wrapped MapVals
+		makeState := func(label string, priority int64) provider.Value {
+			inner := provider.NewOrderedMap()
+			inner.Set("priority", provider.IntVal(priority))
+			wrapper := provider.NewOrderedMap()
+			wrapper.Set(label, provider.MapVal(inner))
+			return provider.MapVal(wrapper)
+		}
+		wantBody := provider.NewOrderedMap()
+		wantBody.Set("state", provider.ListVal([]provider.Value{
+			makeState("hot", 100),
+			makeState("warm", 50),
+			makeState("delete", 0),
+		}))
+		if !got.Body.Equal(wantBody) {
+			t.Errorf("Body mismatch")
+		}
+	})
+
+	t.Run("mixed_attrs_and_blocks", func(t *testing.T) {
+		block := dcl.Block{
+			Type:  "policy",
+			Label: "p",
+			Attributes: []dcl.Attribute{
+				{Key: "description", Value: &dcl.LiteralString{Value: "test policy"}},
+			},
+			Blocks: []dcl.Block{
+				{
+					Type: "actions",
+					Attributes: []dcl.Attribute{
+						{Key: "delete", Value: &dcl.LiteralBool{Value: true}},
+					},
+				},
+			},
+		}
+
+		got, err := blockToResource(block)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// Attrs first in OrderedMap, then block entries.
+		keys := got.Body.Keys()
+		if len(keys) != 2 || keys[0] != "description" || keys[1] != "actions" {
+			t.Errorf("keys = %v, want [description actions]", keys)
+		}
+
+		actionsInner := provider.NewOrderedMap()
+		actionsInner.Set("delete", provider.BoolVal(true))
+		wantBody := provider.NewOrderedMap()
+		wantBody.Set("description", provider.StringVal("test policy"))
+		wantBody.Set("actions", provider.MapVal(actionsInner))
+		if !got.Body.Equal(wantBody) {
+			t.Errorf("Body mismatch")
+		}
+	})
+
+	t.Run("multiple_different_types", func(t *testing.T) {
+		block := dcl.Block{
+			Type:  "policy",
+			Label: "p",
+			Blocks: []dcl.Block{
+				{
+					Type: "actions",
+					Attributes: []dcl.Attribute{
+						{Key: "delete", Value: &dcl.LiteralBool{Value: true}},
+					},
+				},
+				{
+					Type: "transition",
+					Attributes: []dcl.Attribute{
+						{Key: "dest", Value: &dcl.LiteralString{Value: "warm"}},
+					},
+				},
+			},
+		}
+
+		got, err := blockToResource(block)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		actionsInner := provider.NewOrderedMap()
+		actionsInner.Set("delete", provider.BoolVal(true))
+		transitionInner := provider.NewOrderedMap()
+		transitionInner.Set("dest", provider.StringVal("warm"))
+
+		wantBody := provider.NewOrderedMap()
+		wantBody.Set("actions", provider.MapVal(actionsInner))
+		wantBody.Set("transition", provider.MapVal(transitionInner))
+		if !got.Body.Equal(wantBody) {
+			t.Errorf("Body mismatch")
+		}
+	})
+}
+
+func TestBlockToResource_DeepNesting(t *testing.T) {
+	t.Run("three_levels", func(t *testing.T) {
+		// policy → state "hot" → transition { dest = "warm" }
+		block := dcl.Block{
+			Type:  "policy",
+			Label: "lifecycle",
+			Blocks: []dcl.Block{
+				{
+					Type:  "state",
+					Label: "hot",
+					Blocks: []dcl.Block{
+						{
+							Type: "transition",
+							Attributes: []dcl.Attribute{
+								{Key: "dest", Value: &dcl.LiteralString{Value: "warm"}},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		got, err := blockToResource(block)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// transition inner: {dest: "warm"}
+		transInner := provider.NewOrderedMap()
+		transInner.Set("dest", provider.StringVal("warm"))
+		// state "hot" inner: {transition: MapVal(transInner)}
+		stateInner := provider.NewOrderedMap()
+		stateInner.Set("transition", provider.MapVal(transInner))
+		// labeled wrapper: {"hot": MapVal(stateInner)}
+		hotWrapper := provider.NewOrderedMap()
+		hotWrapper.Set("hot", provider.MapVal(stateInner))
+
+		wantBody := provider.NewOrderedMap()
+		wantBody.Set("state", provider.MapVal(hotWrapper))
+		if !got.Body.Equal(wantBody) {
+			t.Errorf("Body mismatch")
+		}
+	})
+
+	t.Run("full_ism", func(t *testing.T) {
+		// Full ISM policy: 3 states with transitions and actions.
+		block := dcl.Block{
+			Type:  "opensearch_ism_policy",
+			Label: "hot_warm_delete",
+			Attributes: []dcl.Attribute{
+				{Key: "description", Value: &dcl.LiteralString{Value: "lifecycle policy"}},
+			},
+			Blocks: []dcl.Block{
+				{
+					Type:  "state",
+					Label: "hot",
+					Attributes: []dcl.Attribute{
+						{Key: "priority", Value: &dcl.LiteralInt{Value: 100}},
+					},
+					Blocks: []dcl.Block{
+						{
+							Type: "transition",
+							Attributes: []dcl.Attribute{
+								{Key: "dest", Value: &dcl.LiteralString{Value: "warm"}},
+								{Key: "min_index_age", Value: &dcl.LiteralString{Value: "7d"}},
+							},
+						},
+					},
+				},
+				{
+					Type:  "state",
+					Label: "warm",
+					Attributes: []dcl.Attribute{
+						{Key: "priority", Value: &dcl.LiteralInt{Value: 50}},
+					},
+					Blocks: []dcl.Block{
+						{
+							Type: "actions",
+							Attributes: []dcl.Attribute{
+								{Key: "force_merge", Value: &dcl.LiteralBool{Value: true}},
+							},
+						},
+						{
+							Type: "transition",
+							Attributes: []dcl.Attribute{
+								{Key: "dest", Value: &dcl.LiteralString{Value: "delete"}},
+								{Key: "min_index_age", Value: &dcl.LiteralString{Value: "30d"}},
+							},
+						},
+					},
+				},
+				{
+					Type:  "state",
+					Label: "delete",
+					Attributes: []dcl.Attribute{
+						{Key: "priority", Value: &dcl.LiteralInt{Value: 0}},
+					},
+					Blocks: []dcl.Block{
+						{
+							Type: "actions",
+							Attributes: []dcl.Attribute{
+								{Key: "delete", Value: &dcl.LiteralBool{Value: true}},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		got, err := blockToResource(block)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if got.ID.Type != "opensearch_ism_policy" || got.ID.Name != "hot_warm_delete" {
+			t.Errorf("ID = %v", got.ID)
+		}
+
+		// Build expected structure.
+		// hot state
+		hotTrans := provider.NewOrderedMap()
+		hotTrans.Set("dest", provider.StringVal("warm"))
+		hotTrans.Set("min_index_age", provider.StringVal("7d"))
+		hotInner := provider.NewOrderedMap()
+		hotInner.Set("priority", provider.IntVal(100))
+		hotInner.Set("transition", provider.MapVal(hotTrans))
+		hotWrapped := provider.NewOrderedMap()
+		hotWrapped.Set("hot", provider.MapVal(hotInner))
+
+		// warm state
+		warmActions := provider.NewOrderedMap()
+		warmActions.Set("force_merge", provider.BoolVal(true))
+		warmTrans := provider.NewOrderedMap()
+		warmTrans.Set("dest", provider.StringVal("delete"))
+		warmTrans.Set("min_index_age", provider.StringVal("30d"))
+		warmInner := provider.NewOrderedMap()
+		warmInner.Set("priority", provider.IntVal(50))
+		warmInner.Set("actions", provider.MapVal(warmActions))
+		warmInner.Set("transition", provider.MapVal(warmTrans))
+		warmWrapped := provider.NewOrderedMap()
+		warmWrapped.Set("warm", provider.MapVal(warmInner))
+
+		// delete state
+		deleteActions := provider.NewOrderedMap()
+		deleteActions.Set("delete", provider.BoolVal(true))
+		deleteInner := provider.NewOrderedMap()
+		deleteInner.Set("priority", provider.IntVal(0))
+		deleteInner.Set("actions", provider.MapVal(deleteActions))
+		deleteWrapped := provider.NewOrderedMap()
+		deleteWrapped.Set("delete", provider.MapVal(deleteInner))
+
+		wantBody := provider.NewOrderedMap()
+		wantBody.Set("description", provider.StringVal("lifecycle policy"))
+		wantBody.Set("state", provider.ListVal([]provider.Value{
+			provider.MapVal(hotWrapped),
+			provider.MapVal(warmWrapped),
+			provider.MapVal(deleteWrapped),
+		}))
+
+		if !got.Body.Equal(wantBody) {
+			t.Errorf("Body mismatch for full ISM policy")
+		}
+	})
+}
+
+func TestBlockToResource_Errors(t *testing.T) {
+	t.Run("nil_attribute_value", func(t *testing.T) {
+		block := dcl.Block{
+			Type:  "index",
+			Label: "x",
+			Attributes: []dcl.Attribute{
+				{Key: "bad", Value: nil},
+			},
+		}
+		_, err := blockToResource(block)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, `attribute "bad"`) {
+			t.Errorf("error = %q, want it to contain %q", msg, `attribute "bad"`)
+		}
+		if !strings.Contains(msg, "nil expression") {
+			t.Errorf("error = %q, want it to contain %q", msg, "nil expression")
+		}
+	})
+
+	t.Run("nil_in_nested_block", func(t *testing.T) {
+		block := dcl.Block{
+			Type:  "policy",
+			Label: "p",
+			Blocks: []dcl.Block{
+				{
+					Type: "actions",
+					Attributes: []dcl.Attribute{
+						{Key: "bad", Value: nil},
+					},
+				},
+			},
+		}
+		_, err := blockToResource(block)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, `block "actions"`) {
+			t.Errorf("error = %q, want it to contain %q", msg, `block "actions"`)
+		}
+		if !strings.Contains(msg, `attribute "bad"`) {
+			t.Errorf("error = %q, want it to contain %q", msg, `attribute "bad"`)
+		}
+	})
+
+	t.Run("nil_in_multi_block", func(t *testing.T) {
+		block := dcl.Block{
+			Type:  "policy",
+			Label: "p",
+			Blocks: []dcl.Block{
+				{
+					Type:  "state",
+					Label: "ok",
+					Attributes: []dcl.Attribute{
+						{Key: "priority", Value: &dcl.LiteralInt{Value: 1}},
+					},
+				},
+				{
+					Type:  "state",
+					Label: "bad",
+					Attributes: []dcl.Attribute{
+						{Key: "broken", Value: nil},
+					},
+				},
+			},
+		}
+		_, err := blockToResource(block)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, `block "state"[1]`) {
+			t.Errorf("error = %q, want it to contain %q", msg, `block "state"[1]`)
+		}
+		if !strings.Contains(msg, `attribute "broken"`) {
+			t.Errorf("error = %q, want it to contain %q", msg, `attribute "broken"`)
+		}
+	})
+}
