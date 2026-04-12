@@ -7,6 +7,41 @@ import (
 	"github.com/MathewBravo/datastorectl/provider"
 )
 
+// ResourceSet is a flat, validated collection of resources produced by
+// converting all blocks in a DCL file.
+type ResourceSet struct {
+	Resources []provider.Resource
+}
+
+// ConvertFile converts all blocks in a parsed DCL file into a ResourceSet.
+// It returns an error if the file contains parse errors or if any two
+// blocks produce the same ResourceID.
+func ConvertFile(file *dcl.File) (*ResourceSet, error) {
+	if file == nil {
+		return nil, fmt.Errorf("cannot convert nil file")
+	}
+	if file.Diagnostics.HasErrors() {
+		return nil, fmt.Errorf("file has parse errors: %s", file.Diagnostics.Error())
+	}
+
+	resources := make([]provider.Resource, 0, len(file.Blocks))
+	seen := map[provider.ResourceID]struct{}{}
+
+	for i, block := range file.Blocks {
+		r, err := blockToResource(block)
+		if err != nil {
+			return nil, fmt.Errorf("block %d (%s %q): %w", i, block.Type, block.Label, err)
+		}
+		if _, dup := seen[r.ID]; dup {
+			return nil, fmt.Errorf("duplicate resource %q", r.ID)
+		}
+		seen[r.ID] = struct{}{}
+		resources = append(resources, r)
+	}
+
+	return &ResourceSet{Resources: resources}, nil
+}
+
 // exprToValue converts a DCL AST expression into a provider Value.
 // Literals become concrete values. Identifier becomes a StringVal.
 // Reference and FunctionCall become placeholder values for later resolution.
