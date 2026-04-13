@@ -8,10 +8,6 @@ import (
 	"github.com/MathewBravo/datastorectl/provider"
 )
 
-func rid(typ, name string) provider.ResourceID {
-	return provider.ResourceID{Type: typ, Name: name}
-}
-
 func TestTopologicalSort_Basic(t *testing.T) {
 	t.Run("empty_graph", func(t *testing.T) {
 		g := NewGraph()
