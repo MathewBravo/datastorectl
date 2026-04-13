@@ -17,6 +17,8 @@ type mockEngineProvider struct {
 	configureFn func(ctx context.Context, config *provider.OrderedMap) dcl.Diagnostics
 	discoverFn  func(ctx context.Context) ([]provider.Resource, dcl.Diagnostics)
 	normalizeFn func(ctx context.Context, r provider.Resource) (provider.Resource, dcl.Diagnostics)
+	validateFn  func(ctx context.Context, r provider.Resource) dcl.Diagnostics
+	applyFn     func(ctx context.Context, op provider.Operation, r provider.Resource) dcl.Diagnostics
 }
 
 func (m *mockEngineProvider) Configure(ctx context.Context, config *provider.OrderedMap) dcl.Diagnostics {
@@ -40,11 +42,17 @@ func (m *mockEngineProvider) Normalize(ctx context.Context, r provider.Resource)
 	return r, nil
 }
 
-func (m *mockEngineProvider) Validate(context.Context, provider.Resource) dcl.Diagnostics {
+func (m *mockEngineProvider) Validate(ctx context.Context, r provider.Resource) dcl.Diagnostics {
+	if m.validateFn != nil {
+		return m.validateFn(ctx, r)
+	}
 	return nil
 }
 
-func (m *mockEngineProvider) Apply(context.Context, provider.Operation, provider.Resource) dcl.Diagnostics {
+func (m *mockEngineProvider) Apply(ctx context.Context, op provider.Operation, r provider.Resource) dcl.Diagnostics {
+	if m.applyFn != nil {
+		return m.applyFn(ctx, op, r)
+	}
 	return nil
 }
 
@@ -525,3 +533,389 @@ func TestEnginePlan(t *testing.T) {
 
 // errTestFail is a sentinel error for test assertions.
 var errTestFail = fmt.Errorf("test-induced failure")
+
+func TestEngineApply(t *testing.T) {
+	t.Run("happy_path_creates", func(t *testing.T) {
+		var appliedOps []provider.Operation
+		mock := &mockEngineProvider{
+			applyFn: func(_ context.Context, op provider.Operation, _ provider.Resource) dcl.Diagnostics {
+				appliedOps = append(appliedOps, op)
+				return nil
+			},
+		}
+		provider.Register("aeng1", func() provider.Provider { return mock })
+
+		e := &Engine{SecretResolver: stubSecretResolver{}}
+		file := makeFile(
+			provider.ResourceID{Type: "aeng1_role", Name: "admin"},
+			provider.ResourceID{Type: "aeng1_policy", Name: "ro"},
+		)
+
+		result, err := e.Apply(context.Background(), file, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result.Results) != 2 {
+			t.Fatalf("expected 2 results, got %d", len(result.Results))
+		}
+		for _, r := range result.Results {
+			if r.Status != StatusSuccess {
+				t.Errorf("expected success for %s, got %s", r.ID, r.Status)
+			}
+		}
+		if len(appliedOps) != 2 {
+			t.Fatalf("expected applyFn called 2 times, got %d", len(appliedOps))
+		}
+		for _, op := range appliedOps {
+			if op != provider.OpCreate {
+				t.Errorf("expected OpCreate, got %s", op)
+			}
+		}
+	})
+
+	t.Run("happy_path_update", func(t *testing.T) {
+		bodyLive := provider.NewOrderedMap()
+		bodyLive.Set("host", provider.StringVal("old"))
+
+		var appliedOps []provider.Operation
+		mock := &mockEngineProvider{
+			discoverFn: func(context.Context) ([]provider.Resource, dcl.Diagnostics) {
+				return []provider.Resource{
+					{ID: rid("aeng2_svc", "a"), Body: bodyLive},
+				}, nil
+			},
+			applyFn: func(_ context.Context, op provider.Operation, _ provider.Resource) dcl.Diagnostics {
+				appliedOps = append(appliedOps, op)
+				return nil
+			},
+		}
+		provider.Register("aeng2", func() provider.Provider { return mock })
+
+		file := &dcl.File{
+			Blocks: []dcl.Block{
+				{Type: "aeng2_svc", Label: "a", Attributes: []dcl.Attribute{
+					{Key: "host", Value: &dcl.LiteralString{Value: "new"}},
+				}},
+			},
+		}
+
+		e := &Engine{SecretResolver: stubSecretResolver{}}
+		result, err := e.Apply(context.Background(), file, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.HasErrors() {
+			t.Error("expected no errors in result")
+		}
+		if len(appliedOps) != 1 || appliedOps[0] != provider.OpUpdate {
+			t.Errorf("expected 1 OpUpdate call, got %v", appliedOps)
+		}
+	})
+
+	t.Run("happy_path_delete", func(t *testing.T) {
+		var appliedOps []provider.Operation
+		mock := &mockEngineProvider{
+			discoverFn: func(context.Context) ([]provider.Resource, dcl.Diagnostics) {
+				return []provider.Resource{
+					{ID: rid("aeng3_svc", "orphan"), Body: provider.NewOrderedMap()},
+				}, nil
+			},
+			applyFn: func(_ context.Context, op provider.Operation, _ provider.Resource) dcl.Diagnostics {
+				appliedOps = append(appliedOps, op)
+				return nil
+			},
+		}
+		provider.Register("aeng3", func() provider.Provider { return mock })
+
+		// Need at least one desired resource to get ConfigureProviders to find the provider.
+		file := makeFile(provider.ResourceID{Type: "aeng3_svc", Name: "keeper"})
+
+		e := &Engine{SecretResolver: stubSecretResolver{}}
+		result, err := e.Apply(context.Background(), file, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.HasErrors() {
+			t.Error("expected no errors in result")
+		}
+		foundDelete := false
+		for _, op := range appliedOps {
+			if op == provider.OpDelete {
+				foundDelete = true
+			}
+		}
+		if !foundDelete {
+			t.Errorf("expected at least one OpDelete call, got %v", appliedOps)
+		}
+	})
+
+	t.Run("happy_path_noop", func(t *testing.T) {
+		bodySame := provider.NewOrderedMap()
+		bodySame.Set("host", provider.StringVal("same"))
+
+		applyFnCalled := false
+		mock := &mockEngineProvider{
+			discoverFn: func(context.Context) ([]provider.Resource, dcl.Diagnostics) {
+				return []provider.Resource{
+					{ID: rid("aeng4_svc", "a"), Body: bodySame.Clone()},
+				}, nil
+			},
+			applyFn: func(_ context.Context, _ provider.Operation, _ provider.Resource) dcl.Diagnostics {
+				applyFnCalled = true
+				return nil
+			},
+		}
+		provider.Register("aeng4", func() provider.Provider { return mock })
+
+		file := &dcl.File{
+			Blocks: []dcl.Block{
+				{Type: "aeng4_svc", Label: "a", Attributes: []dcl.Attribute{
+					{Key: "host", Value: &dcl.LiteralString{Value: "same"}},
+				}},
+			},
+		}
+
+		e := &Engine{SecretResolver: stubSecretResolver{}}
+		result, err := e.Apply(context.Background(), file, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.HasErrors() {
+			t.Error("expected no errors in result")
+		}
+		if applyFnCalled {
+			t.Error("expected applyFn NOT called for no-op")
+		}
+	})
+
+	t.Run("validation_error_blocks_apply", func(t *testing.T) {
+		applyFnCalled := false
+		mock := &mockEngineProvider{
+			validateFn: func(context.Context, provider.Resource) dcl.Diagnostics {
+				return dcl.Diagnostics{{Severity: dcl.SeverityError, Message: "invalid"}}
+			},
+			applyFn: func(context.Context, provider.Operation, provider.Resource) dcl.Diagnostics {
+				applyFnCalled = true
+				return nil
+			},
+		}
+		provider.Register("aeng5", func() provider.Provider { return mock })
+
+		file := makeFile(provider.ResourceID{Type: "aeng5_svc", Name: "a"})
+
+		e := &Engine{SecretResolver: stubSecretResolver{}}
+		_, err := e.Apply(context.Background(), file, nil)
+		if err == nil {
+			t.Fatal("expected validation error")
+		}
+		if !strings.Contains(err.Error(), "invalid") {
+			t.Errorf("expected 'invalid' in error, got: %s", err.Error())
+		}
+		if applyFnCalled {
+			t.Error("expected applyFn NOT called when validation fails")
+		}
+	})
+
+	t.Run("plan_error_propagates", func(t *testing.T) {
+		e := &Engine{SecretResolver: stubSecretResolver{}}
+		_, err := e.Apply(context.Background(), nil, nil)
+		if err == nil {
+			t.Fatal("expected error for nil file")
+		}
+		if !strings.Contains(err.Error(), "plan") {
+			t.Errorf("expected 'plan' in error, got: %s", err.Error())
+		}
+		if !strings.Contains(err.Error(), "convert") {
+			t.Errorf("expected 'convert' in error, got: %s", err.Error())
+		}
+	})
+
+	t.Run("apply_failure_in_result", func(t *testing.T) {
+		mock := &mockEngineProvider{
+			applyFn: func(context.Context, provider.Operation, provider.Resource) dcl.Diagnostics {
+				return dcl.Diagnostics{{Severity: dcl.SeverityError, Message: "boom"}}
+			},
+		}
+		provider.Register("aeng7", func() provider.Provider { return mock })
+
+		file := makeFile(provider.ResourceID{Type: "aeng7_svc", Name: "a"})
+
+		e := &Engine{SecretResolver: stubSecretResolver{}}
+		result, err := e.Apply(context.Background(), file, nil)
+		if err != nil {
+			t.Fatalf("expected nil error from Apply, got: %v", err)
+		}
+		if !result.HasErrors() {
+			t.Error("expected HasErrors() true for failed apply")
+		}
+	})
+
+	t.Run("context_propagation", func(t *testing.T) {
+		type ctxKey struct{}
+
+		var validateCtx, applyCtx context.Context
+		mock := &mockEngineProvider{
+			validateFn: func(ctx context.Context, _ provider.Resource) dcl.Diagnostics {
+				validateCtx = ctx
+				return nil
+			},
+			applyFn: func(ctx context.Context, _ provider.Operation, _ provider.Resource) dcl.Diagnostics {
+				applyCtx = ctx
+				return nil
+			},
+		}
+		provider.Register("aeng8", func() provider.Provider { return mock })
+
+		ctx := context.WithValue(context.Background(), ctxKey{}, "propagated")
+		file := makeFile(provider.ResourceID{Type: "aeng8_svc", Name: "a"})
+
+		e := &Engine{SecretResolver: stubSecretResolver{}}
+		_, err := e.Apply(ctx, file, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if validateCtx.Value(ctxKey{}) != "propagated" {
+			t.Error("context not propagated to Validate")
+		}
+		if applyCtx.Value(ctxKey{}) != "propagated" {
+			t.Error("context not propagated to Apply")
+		}
+	})
+}
+
+func TestEngineDryRun(t *testing.T) {
+	t.Run("happy_path", func(t *testing.T) {
+		applyFnCalled := false
+		mock := &mockEngineProvider{
+			applyFn: func(context.Context, provider.Operation, provider.Resource) dcl.Diagnostics {
+				applyFnCalled = true
+				return nil
+			},
+		}
+		provider.Register("dreng1", func() provider.Provider { return mock })
+
+		file := makeFile(
+			provider.ResourceID{Type: "dreng1_svc", Name: "a"},
+			provider.ResourceID{Type: "dreng1_svc", Name: "b"},
+		)
+
+		e := &Engine{SecretResolver: stubSecretResolver{}}
+		plan, err := e.DryRun(context.Background(), file, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(plan.Creates()) != 2 {
+			t.Errorf("expected 2 creates, got %d", len(plan.Creates()))
+		}
+		if applyFnCalled {
+			t.Error("expected applyFn NOT called during dry run")
+		}
+	})
+
+	t.Run("validation_error", func(t *testing.T) {
+		mock := &mockEngineProvider{
+			validateFn: func(context.Context, provider.Resource) dcl.Diagnostics {
+				return dcl.Diagnostics{{Severity: dcl.SeverityError, Message: "bad field"}}
+			},
+		}
+		provider.Register("dreng2", func() provider.Provider { return mock })
+
+		file := makeFile(provider.ResourceID{Type: "dreng2_svc", Name: "a"})
+
+		e := &Engine{SecretResolver: stubSecretResolver{}}
+		_, err := e.DryRun(context.Background(), file, nil)
+		if err == nil {
+			t.Fatal("expected validation error")
+		}
+		if !strings.Contains(err.Error(), "bad field") {
+			t.Errorf("expected 'bad field' in error, got: %s", err.Error())
+		}
+	})
+
+	t.Run("plan_error_propagates", func(t *testing.T) {
+		e := &Engine{SecretResolver: stubSecretResolver{}}
+		_, err := e.DryRun(context.Background(), nil, nil)
+		if err == nil {
+			t.Fatal("expected error for nil file")
+		}
+		if !strings.Contains(err.Error(), "plan") {
+			t.Errorf("expected 'plan' in error, got: %s", err.Error())
+		}
+	})
+}
+
+func TestValidateResources(t *testing.T) {
+	t.Run("skips_noops_and_deletes", func(t *testing.T) {
+		liveRes := provider.Resource{ID: rid("veng1_svc", "dead"), Body: provider.NewOrderedMap()}
+		desiredRes := provider.Resource{ID: rid("veng1_svc", "same"), Body: provider.NewOrderedMap()}
+
+		plan := &Plan{
+			Changes: []ResourceChange{
+				{ID: rid("veng1_svc", "same"), Type: ChangeNoOp, Desired: &desiredRes, Live: &desiredRes},
+				{ID: rid("veng1_svc", "dead"), Type: ChangeDelete, Live: &liveRes},
+			},
+		}
+
+		providers := map[string]provider.Provider{
+			"veng1_svc": &mockEngineProvider{
+				validateFn: func(context.Context, provider.Resource) dcl.Diagnostics {
+					panic("validateFn should not be called for no-ops and deletes")
+				},
+			},
+		}
+
+		if err := validateResources(context.Background(), plan, providers); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("validates_creates_and_updates", func(t *testing.T) {
+		var callCount int
+		desiredA := provider.Resource{ID: rid("veng2_svc", "a"), Body: provider.NewOrderedMap()}
+		desiredB := provider.Resource{ID: rid("veng2_svc", "b"), Body: provider.NewOrderedMap()}
+		liveB := provider.Resource{ID: rid("veng2_svc", "b"), Body: provider.NewOrderedMap()}
+
+		plan := &Plan{
+			Changes: []ResourceChange{
+				{ID: rid("veng2_svc", "a"), Type: ChangeCreate, Desired: &desiredA},
+				{ID: rid("veng2_svc", "b"), Type: ChangeUpdate, Desired: &desiredB, Live: &liveB},
+			},
+		}
+
+		providers := map[string]provider.Provider{
+			"veng2_svc": &mockEngineProvider{
+				validateFn: func(context.Context, provider.Resource) dcl.Diagnostics {
+					callCount++
+					return nil
+				},
+			},
+		}
+
+		if err := validateResources(context.Background(), plan, providers); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if callCount != 2 {
+			t.Errorf("expected validateFn called 2 times, got %d", callCount)
+		}
+	})
+
+	t.Run("missing_provider", func(t *testing.T) {
+		desired := provider.Resource{ID: rid("veng3_svc", "a"), Body: provider.NewOrderedMap()}
+		plan := &Plan{
+			Changes: []ResourceChange{
+				{ID: rid("veng3_svc", "a"), Type: ChangeCreate, Desired: &desired},
+			},
+		}
+
+		// Empty providers map — no provider for veng3_svc.
+		providers := map[string]provider.Provider{}
+
+		err := validateResources(context.Background(), plan, providers)
+		if err == nil {
+			t.Fatal("expected error for missing provider")
+		}
+		if !strings.Contains(err.Error(), "no provider") {
+			t.Errorf("expected 'no provider' in error, got: %s", err.Error())
+		}
+	})
+}
