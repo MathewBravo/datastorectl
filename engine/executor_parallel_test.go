@@ -2,7 +2,11 @@ package engine
 
 import (
 	"context"
+	"errors"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/MathewBravo/datastorectl/dcl"
 	"github.com/MathewBravo/datastorectl/provider"
@@ -115,9 +119,9 @@ func TestExecute(t *testing.T) {
 			},
 		}
 
-		callCount := 0
+		var callCount atomic.Int32
 		mock := &mockProvider{applyFn: func(_ context.Context, _ provider.Operation, _ provider.Resource) dcl.Diagnostics {
-			callCount++
+			callCount.Add(1)
 			return nil
 		}}
 
@@ -129,8 +133,8 @@ func TestExecute(t *testing.T) {
 		if result.Results[0].Status != StatusSuccess {
 			t.Errorf("expected success, got %s", result.Results[0].Status)
 		}
-		if callCount != 0 {
-			t.Errorf("expected 0 Apply calls for no-op, got %d", callCount)
+		if callCount.Load() != 0 {
+			t.Errorf("expected 0 Apply calls for no-op, got %d", callCount.Load())
 		}
 	})
 
@@ -154,8 +158,8 @@ func TestExecute(t *testing.T) {
 		if r.Status != StatusFailed {
 			t.Errorf("expected failed, got %s", r.Status)
 		}
-		if r.Error == nil || r.Error.Error() == "" {
-			t.Error("expected error about missing provider")
+		if r.Error == nil || !strings.Contains(r.Error.Error(), "no provider") {
+			t.Errorf("expected error about missing provider, got %v", r.Error)
 		}
 	})
 
@@ -181,6 +185,9 @@ func TestExecute(t *testing.T) {
 		ra := findResult(result.Results, a)
 		if rb.Status != StatusFailed {
 			t.Errorf("B: expected failed, got %s", rb.Status)
+		}
+		if !errors.Is(rb.Error, context.Canceled) {
+			t.Errorf("B: expected context.Canceled error, got %v", rb.Error)
 		}
 		if ra.Status != StatusSkipped {
 			t.Errorf("A: expected skipped, got %s", ra.Status)
@@ -241,7 +248,8 @@ func TestExecute(t *testing.T) {
 		}
 
 		// Both goroutines must reach the barrier for either to proceed.
-		// If execution is sequential, this deadlocks (caught by test timeout).
+		// If execution is sequential, this deadlocks — caught by the
+		// local timeout below rather than the global test timeout.
 		barrier := make(chan struct{}, 2)
 		mock := &mockProvider{applyFn: func(_ context.Context, _ provider.Operation, _ provider.Resource) dcl.Diagnostics {
 			barrier <- struct{}{} // signal arrival
@@ -249,7 +257,17 @@ func TestExecute(t *testing.T) {
 			return nil
 		}}
 
-		result := Execute(context.Background(), plan, g, map[string]provider.Provider{"svc": mock})
+		done := make(chan *ApplyResult, 1)
+		go func() {
+			done <- Execute(context.Background(), plan, g, map[string]provider.Provider{"svc": mock})
+		}()
+
+		var result *ApplyResult
+		select {
+		case result = <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("deadlock: layer resources appear to be running sequentially")
+		}
 
 		if len(result.Results) != 2 {
 			t.Fatalf("expected 2 results, got %d", len(result.Results))

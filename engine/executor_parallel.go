@@ -15,6 +15,8 @@ import (
 func Execute(ctx context.Context, plan *OrderedPlan, graph *Graph, providers map[string]provider.Provider) *ApplyResult {
 	result := &ApplyResult{}
 	skip := NewSkipTracker(graph)
+	// mu guards skip and result.Results. All SkipTracker calls (ShouldSkip,
+	// MarkFailed) and result mutations must be made under this lock.
 	var mu sync.Mutex
 
 	for _, layer := range plan.Layers {
