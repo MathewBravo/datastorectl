@@ -59,6 +59,11 @@ func DiffValues(path string, old, new provider.Value) []ValueDiff {
 		return diffMaps(path, old.Map, new.Map)
 	}
 
+	// Structural list diffing.
+	if old.Kind == provider.KindList && new.Kind == provider.KindList {
+		return diffLists(path, old.List, new.List)
+	}
+
 	// Both non-null, not equal → modified (scalar fallback).
 	return []ValueDiff{{Kind: DiffModified, Path: path, Old: old, New: new}}
 }
@@ -97,5 +102,27 @@ func diffMaps(path string, old, new *provider.OrderedMap) []ValueDiff {
 		diffs = append(diffs, ValueDiff{Kind: DiffAdded, Path: childPath, New: newVal})
 	}
 
+	return diffs
+}
+
+// diffLists produces per-element leaf-level diffs between two lists using
+// positional comparison. Overlapping indices are recursed; trailing elements
+// in either list are reported as additions or removals.
+func diffLists(path string, old, new []provider.Value) []ValueDiff {
+	var diffs []ValueDiff
+	minLen := min(len(old), len(new))
+
+	for i := 0; i < minLen; i++ {
+		childPath := fmt.Sprintf("%s[%d]", path, i)
+		diffs = append(diffs, DiffValues(childPath, old[i], new[i])...)
+	}
+	for i := minLen; i < len(new); i++ {
+		childPath := fmt.Sprintf("%s[%d]", path, i)
+		diffs = append(diffs, ValueDiff{Kind: DiffAdded, Path: childPath, New: new[i]})
+	}
+	for i := minLen; i < len(old); i++ {
+		childPath := fmt.Sprintf("%s[%d]", path, i)
+		diffs = append(diffs, ValueDiff{Kind: DiffRemoved, Path: childPath, Old: old[i]})
+	}
 	return diffs
 }
