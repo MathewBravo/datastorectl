@@ -154,6 +154,158 @@ func TestDiffValues_ComplexFallback(t *testing.T) {
 		if diffs[0].Kind != DiffModified {
 			t.Fatalf("expected DiffModified, got %s", diffs[0].Kind)
 		}
+		if diffs[0].Path != "config.a" {
+			t.Fatalf("expected path %q, got %q", "config.a", diffs[0].Path)
+		}
+	})
+}
+
+func TestDiffValues_Maps(t *testing.T) {
+	t.Run("key_added", func(t *testing.T) {
+		old := makeMapVal("a", provider.IntVal(1))
+		nm := provider.NewOrderedMap()
+		nm.Set("a", provider.IntVal(1))
+		nm.Set("b", provider.IntVal(2))
+		new := provider.MapVal(nm)
+		diffs := DiffValues("root", old, new)
+		if len(diffs) != 1 {
+			t.Fatalf("expected 1 diff, got %d: %v", len(diffs), diffs)
+		}
+		if diffs[0].Kind != DiffAdded || diffs[0].Path != "root.b" {
+			t.Fatalf("expected DiffAdded at root.b, got %s at %q", diffs[0].Kind, diffs[0].Path)
+		}
+	})
+
+	t.Run("key_removed", func(t *testing.T) {
+		om := provider.NewOrderedMap()
+		om.Set("a", provider.IntVal(1))
+		om.Set("b", provider.IntVal(2))
+		old := provider.MapVal(om)
+		new := makeMapVal("a", provider.IntVal(1))
+		diffs := DiffValues("root", old, new)
+		if len(diffs) != 1 {
+			t.Fatalf("expected 1 diff, got %d: %v", len(diffs), diffs)
+		}
+		if diffs[0].Kind != DiffRemoved || diffs[0].Path != "root.b" {
+			t.Fatalf("expected DiffRemoved at root.b, got %s at %q", diffs[0].Kind, diffs[0].Path)
+		}
+	})
+
+	t.Run("value_modified", func(t *testing.T) {
+		old := makeMapVal("a", provider.IntVal(1))
+		new := makeMapVal("a", provider.IntVal(2))
+		diffs := DiffValues("root", old, new)
+		if len(diffs) != 1 {
+			t.Fatalf("expected 1 diff, got %d: %v", len(diffs), diffs)
+		}
+		if diffs[0].Kind != DiffModified || diffs[0].Path != "root.a" {
+			t.Fatalf("expected DiffModified at root.a, got %s at %q", diffs[0].Kind, diffs[0].Path)
+		}
+	})
+
+	t.Run("multiple_changes", func(t *testing.T) {
+		om := provider.NewOrderedMap()
+		om.Set("a", provider.IntVal(1))
+		om.Set("b", provider.IntVal(2))
+		old := provider.MapVal(om)
+
+		nm := provider.NewOrderedMap()
+		nm.Set("a", provider.IntVal(3))
+		nm.Set("c", provider.IntVal(4))
+		new := provider.MapVal(nm)
+
+		diffs := DiffValues("root", old, new)
+		if len(diffs) != 3 {
+			t.Fatalf("expected 3 diffs, got %d: %v", len(diffs), diffs)
+		}
+		// Old key order first: modified a, removed b.
+		if diffs[0].Kind != DiffModified || diffs[0].Path != "root.a" {
+			t.Fatalf("diffs[0]: expected DiffModified at root.a, got %s at %q", diffs[0].Kind, diffs[0].Path)
+		}
+		if diffs[1].Kind != DiffRemoved || diffs[1].Path != "root.b" {
+			t.Fatalf("diffs[1]: expected DiffRemoved at root.b, got %s at %q", diffs[1].Kind, diffs[1].Path)
+		}
+		// Then new key order: added c.
+		if diffs[2].Kind != DiffAdded || diffs[2].Path != "root.c" {
+			t.Fatalf("diffs[2]: expected DiffAdded at root.c, got %s at %q", diffs[2].Kind, diffs[2].Path)
+		}
+	})
+
+	t.Run("nested_map", func(t *testing.T) {
+		old := makeMapVal("m", makeMapVal("x", provider.IntVal(1)))
+		new := makeMapVal("m", makeMapVal("x", provider.IntVal(2)))
+		diffs := DiffValues("root", old, new)
+		if len(diffs) != 1 {
+			t.Fatalf("expected 1 diff, got %d: %v", len(diffs), diffs)
+		}
+		if diffs[0].Kind != DiffModified || diffs[0].Path != "root.m.x" {
+			t.Fatalf("expected DiffModified at root.m.x, got %s at %q", diffs[0].Kind, diffs[0].Path)
+		}
+	})
+
+	t.Run("nested_map_key_added", func(t *testing.T) {
+		old := makeMapVal("m", makeMapVal("x", provider.IntVal(1)))
+
+		inner := provider.NewOrderedMap()
+		inner.Set("x", provider.IntVal(1))
+		inner.Set("y", provider.IntVal(2))
+		new := makeMapVal("m", provider.MapVal(inner))
+
+		diffs := DiffValues("root", old, new)
+		if len(diffs) != 1 {
+			t.Fatalf("expected 1 diff, got %d: %v", len(diffs), diffs)
+		}
+		if diffs[0].Kind != DiffAdded || diffs[0].Path != "root.m.y" {
+			t.Fatalf("expected DiffAdded at root.m.y, got %s at %q", diffs[0].Kind, diffs[0].Path)
+		}
+	})
+
+	t.Run("empty_to_populated", func(t *testing.T) {
+		old := provider.MapVal(provider.NewOrderedMap())
+		new := makeMapVal("a", provider.IntVal(1))
+		diffs := DiffValues("root", old, new)
+		if len(diffs) != 1 {
+			t.Fatalf("expected 1 diff, got %d: %v", len(diffs), diffs)
+		}
+		if diffs[0].Kind != DiffAdded || diffs[0].Path != "root.a" {
+			t.Fatalf("expected DiffAdded at root.a, got %s at %q", diffs[0].Kind, diffs[0].Path)
+		}
+	})
+
+	t.Run("populated_to_empty", func(t *testing.T) {
+		old := makeMapVal("a", provider.IntVal(1))
+		new := provider.MapVal(provider.NewOrderedMap())
+		diffs := DiffValues("root", old, new)
+		if len(diffs) != 1 {
+			t.Fatalf("expected 1 diff, got %d: %v", len(diffs), diffs)
+		}
+		if diffs[0].Kind != DiffRemoved || diffs[0].Path != "root.a" {
+			t.Fatalf("expected DiffRemoved at root.a, got %s at %q", diffs[0].Kind, diffs[0].Path)
+		}
+	})
+
+	t.Run("both_empty", func(t *testing.T) {
+		old := provider.MapVal(provider.NewOrderedMap())
+		new := provider.MapVal(provider.NewOrderedMap())
+		diffs := DiffValues("root", old, new)
+		if len(diffs) != 0 {
+			t.Fatalf("expected 0 diffs, got %d: %v", len(diffs), diffs)
+		}
+	})
+
+	t.Run("map_to_non_map", func(t *testing.T) {
+		old := makeMapVal("a", provider.IntVal(1))
+		new := provider.StringVal("not a map")
+		diffs := DiffValues("root", old, new)
+		if len(diffs) != 1 {
+			t.Fatalf("expected 1 diff, got %d: %v", len(diffs), diffs)
+		}
+		if diffs[0].Kind != DiffModified {
+			t.Fatalf("expected DiffModified, got %s", diffs[0].Kind)
+		}
+		if diffs[0].Path != "root" {
+			t.Fatalf("expected path %q, got %q", "root", diffs[0].Path)
+		}
 	})
 }
 

@@ -54,6 +54,48 @@ func DiffValues(path string, old, new provider.Value) []ValueDiff {
 		return []ValueDiff{{Kind: DiffRemoved, Path: path, Old: old}}
 	}
 
+	// Structural map diffing.
+	if old.Kind == provider.KindMap && new.Kind == provider.KindMap {
+		return diffMaps(path, old.Map, new.Map)
+	}
+
 	// Both non-null, not equal → modified (scalar fallback).
 	return []ValueDiff{{Kind: DiffModified, Path: path, Old: old, New: new}}
+}
+
+// diffMaps produces per-key leaf-level diffs between two ordered maps.
+// Diffs are emitted in old-map key order (removals and modifications),
+// then new-map key order (additions).
+func diffMaps(path string, old, new *provider.OrderedMap) []ValueDiff {
+	var diffs []ValueDiff
+
+	// Walk old keys: detect removals and recurse into modifications.
+	for _, key := range old.Keys() {
+		childPath := path + "." + key
+		if path == "" {
+			childPath = key
+		}
+		oldVal, _ := old.Get(key)
+		newVal, found := new.Get(key)
+		if !found {
+			diffs = append(diffs, ValueDiff{Kind: DiffRemoved, Path: childPath, Old: oldVal})
+			continue
+		}
+		diffs = append(diffs, DiffValues(childPath, oldVal, newVal)...)
+	}
+
+	// Walk new keys: detect additions (keys already in old were handled above).
+	for _, key := range new.Keys() {
+		if _, found := old.Get(key); found {
+			continue
+		}
+		childPath := path + "." + key
+		if path == "" {
+			childPath = key
+		}
+		newVal, _ := new.Get(key)
+		diffs = append(diffs, ValueDiff{Kind: DiffAdded, Path: childPath, New: newVal})
+	}
+
+	return diffs
 }
