@@ -2,7 +2,11 @@ package engine
 
 import (
 	"context"
+	"errors"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/MathewBravo/datastorectl/dcl"
 	"github.com/MathewBravo/datastorectl/provider"
@@ -45,9 +49,8 @@ func findResult(results []ResourceResult, id provider.ResourceID) ResourceResult
 	return ResourceResult{}
 }
 
-func TestExecuteSequential(t *testing.T) {
+func TestExecute(t *testing.T) {
 	t.Run("all_succeed", func(t *testing.T) {
-		// A depends on B → layers: [[B], [A]]
 		g := NewGraph()
 		a, b := rid("svc", "a"), rid("svc", "b")
 		g.AddEdge(a, b)
@@ -59,13 +62,11 @@ func TestExecuteSequential(t *testing.T) {
 			},
 		}
 
-		var calls []provider.ResourceID
-		mock := &mockProvider{applyFn: func(_ context.Context, _ provider.Operation, r provider.Resource) dcl.Diagnostics {
-			calls = append(calls, r.ID)
+		mock := &mockProvider{applyFn: func(_ context.Context, _ provider.Operation, _ provider.Resource) dcl.Diagnostics {
 			return nil
 		}}
 
-		result := ExecuteSequential(context.Background(), plan, g, map[string]provider.Provider{"svc": mock})
+		result := Execute(context.Background(), plan, g, map[string]provider.Provider{"svc": mock})
 
 		if len(result.Results) != 2 {
 			t.Fatalf("expected 2 results, got %d", len(result.Results))
@@ -75,14 +76,9 @@ func TestExecuteSequential(t *testing.T) {
 				t.Errorf("resource %s: expected success, got %s", r.ID, r.Status)
 			}
 		}
-		// B should be applied before A.
-		if len(calls) != 2 || calls[0] != b || calls[1] != a {
-			t.Errorf("expected apply order [b, a], got %v", calls)
-		}
 	})
 
 	t.Run("failure_skips_dependent", func(t *testing.T) {
-		// A depends on B → layers: [[B], [A]]; B fails → A skipped.
 		g := NewGraph()
 		a, b := rid("svc", "a"), rid("svc", "b")
 		g.AddEdge(a, b)
@@ -94,13 +90,11 @@ func TestExecuteSequential(t *testing.T) {
 			},
 		}
 
-		callCount := 0
 		mock := &mockProvider{applyFn: func(_ context.Context, _ provider.Operation, _ provider.Resource) dcl.Diagnostics {
-			callCount++
 			return errDiags("boom")
 		}}
 
-		result := ExecuteSequential(context.Background(), plan, g, map[string]provider.Provider{"svc": mock})
+		result := Execute(context.Background(), plan, g, map[string]provider.Provider{"svc": mock})
 
 		rb := findResult(result.Results, b)
 		ra := findResult(result.Results, a)
@@ -109,9 +103,6 @@ func TestExecuteSequential(t *testing.T) {
 		}
 		if ra.Status != StatusSkipped {
 			t.Errorf("A: expected skipped, got %s", ra.Status)
-		}
-		if callCount != 1 {
-			t.Errorf("expected 1 Apply call, got %d", callCount)
 		}
 	})
 
@@ -130,13 +121,11 @@ func TestExecuteSequential(t *testing.T) {
 			},
 		}
 
-		callCount := 0
 		mock := &mockProvider{applyFn: func(_ context.Context, _ provider.Operation, _ provider.Resource) dcl.Diagnostics {
-			callCount++
 			return errDiags("boom")
 		}}
 
-		result := ExecuteSequential(context.Background(), plan, g, map[string]provider.Provider{"svc": mock})
+		result := Execute(context.Background(), plan, g, map[string]provider.Provider{"svc": mock})
 
 		rc := findResult(result.Results, c)
 		rb := findResult(result.Results, b)
@@ -150,8 +139,44 @@ func TestExecuteSequential(t *testing.T) {
 		if ra.Status != StatusSkipped {
 			t.Errorf("A: expected skipped, got %s", ra.Status)
 		}
-		if callCount != 1 {
-			t.Errorf("expected 1 Apply call, got %d", callCount)
+	})
+
+	t.Run("independent_unaffected_by_failure", func(t *testing.T) {
+		g := NewGraph()
+		a, b, c := rid("svc", "a"), rid("svc", "b"), rid("svc", "c")
+		g.AddEdge(a, b)
+		g.AddNode(c)
+
+		plan := &OrderedPlan{
+			Layers: [][]ResourceChange{
+				{
+					{ID: b, Type: ChangeCreate, Desired: dummyResource("svc", "b")},
+					{ID: c, Type: ChangeCreate, Desired: dummyResource("svc", "c")},
+				},
+				{{ID: a, Type: ChangeCreate, Desired: dummyResource("svc", "a")}},
+			},
+		}
+
+		mock := &mockProvider{applyFn: func(_ context.Context, _ provider.Operation, r provider.Resource) dcl.Diagnostics {
+			if r.ID == b {
+				return errDiags("boom")
+			}
+			return nil
+		}}
+
+		result := Execute(context.Background(), plan, g, map[string]provider.Provider{"svc": mock})
+
+		rb := findResult(result.Results, b)
+		ra := findResult(result.Results, a)
+		rc := findResult(result.Results, c)
+		if rb.Status != StatusFailed {
+			t.Errorf("B: expected failed, got %s", rb.Status)
+		}
+		if ra.Status != StatusSkipped {
+			t.Errorf("A: expected skipped, got %s", ra.Status)
+		}
+		if rc.Status != StatusSuccess {
+			t.Errorf("C: expected success, got %s", rc.Status)
 		}
 	})
 
@@ -166,13 +191,13 @@ func TestExecuteSequential(t *testing.T) {
 			},
 		}
 
-		callCount := 0
+		var callCount atomic.Int32
 		mock := &mockProvider{applyFn: func(_ context.Context, _ provider.Operation, _ provider.Resource) dcl.Diagnostics {
-			callCount++
+			callCount.Add(1)
 			return nil
 		}}
 
-		result := ExecuteSequential(context.Background(), plan, g, map[string]provider.Provider{"svc": mock})
+		result := Execute(context.Background(), plan, g, map[string]provider.Provider{"svc": mock})
 
 		if len(result.Results) != 1 {
 			t.Fatalf("expected 1 result, got %d", len(result.Results))
@@ -180,8 +205,8 @@ func TestExecuteSequential(t *testing.T) {
 		if result.Results[0].Status != StatusSuccess {
 			t.Errorf("expected success, got %s", result.Results[0].Status)
 		}
-		if callCount != 0 {
-			t.Errorf("expected 0 Apply calls for no-op, got %d", callCount)
+		if callCount.Load() != 0 {
+			t.Errorf("expected 0 Apply calls for no-op, got %d", callCount.Load())
 		}
 	})
 
@@ -196,7 +221,7 @@ func TestExecuteSequential(t *testing.T) {
 			},
 		}
 
-		result := ExecuteSequential(context.Background(), plan, g, map[string]provider.Provider{})
+		result := Execute(context.Background(), plan, g, map[string]provider.Provider{})
 
 		if len(result.Results) != 1 {
 			t.Fatalf("expected 1 result, got %d", len(result.Results))
@@ -205,13 +230,12 @@ func TestExecuteSequential(t *testing.T) {
 		if r.Status != StatusFailed {
 			t.Errorf("expected failed, got %s", r.Status)
 		}
-		if r.Error == nil || r.Error.Error() == "" {
-			t.Error("expected error about missing provider")
+		if r.Error == nil || !strings.Contains(r.Error.Error(), "no provider") {
+			t.Errorf("expected error about missing provider, got %v", r.Error)
 		}
 	})
 
 	t.Run("context_cancelled", func(t *testing.T) {
-		// A depends on B → layers: [[B], [A]]; cancel before execution.
 		g := NewGraph()
 		a, b := rid("svc", "a"), rid("svc", "b")
 		g.AddEdge(a, b)
@@ -224,15 +248,18 @@ func TestExecuteSequential(t *testing.T) {
 		}
 
 		ctx, cancel := context.WithCancel(context.Background())
-		cancel() // cancel immediately
+		cancel()
 
 		mock := &mockProvider{}
-		result := ExecuteSequential(ctx, plan, g, map[string]provider.Provider{"svc": mock})
+		result := Execute(ctx, plan, g, map[string]provider.Provider{"svc": mock})
 
 		rb := findResult(result.Results, b)
 		ra := findResult(result.Results, a)
 		if rb.Status != StatusFailed {
 			t.Errorf("B: expected failed, got %s", rb.Status)
+		}
+		if !errors.Is(rb.Error, context.Canceled) {
+			t.Errorf("B: expected context.Canceled error, got %v", rb.Error)
 		}
 		if ra.Status != StatusSkipped {
 			t.Errorf("A: expected skipped, got %s", ra.Status)
@@ -261,7 +288,7 @@ func TestExecuteSequential(t *testing.T) {
 			return nil
 		}}
 
-		result := ExecuteSequential(context.Background(), plan, g, map[string]provider.Provider{"svc": mock})
+		result := Execute(context.Background(), plan, g, map[string]provider.Provider{"svc": mock})
 
 		if result.Results[0].Status != StatusSuccess {
 			t.Errorf("expected success, got %s", result.Results[0].Status)
@@ -298,7 +325,7 @@ func TestExecuteSequential(t *testing.T) {
 			return nil
 		}}
 
-		result := ExecuteSequential(context.Background(), plan, g, map[string]provider.Provider{"svc": mock})
+		result := Execute(context.Background(), plan, g, map[string]provider.Provider{"svc": mock})
 
 		for _, r := range result.Results {
 			if r.Status != StatusSuccess {
@@ -316,11 +343,13 @@ func TestExecuteSequential(t *testing.T) {
 		}
 	})
 
-	t.Run("independent_unaffected_by_failure", func(t *testing.T) {
-		// A→B, C independent. B fails → A skipped, C succeeds.
+	t.Run("parallel_execution", func(t *testing.T) {
+		// B and C are in the same layer. Use a channel barrier to prove
+		// both goroutines are running concurrently: each goroutine signals
+		// arrival then waits for the other before completing.
 		g := NewGraph()
-		a, b, c := rid("svc", "a"), rid("svc", "b"), rid("svc", "c")
-		g.AddEdge(a, b)
+		b, c := rid("svc", "b"), rid("svc", "c")
+		g.AddNode(b)
 		g.AddNode(c)
 
 		plan := &OrderedPlan{
@@ -329,30 +358,38 @@ func TestExecuteSequential(t *testing.T) {
 					{ID: b, Type: ChangeCreate, Desired: dummyResource("svc", "b")},
 					{ID: c, Type: ChangeCreate, Desired: dummyResource("svc", "c")},
 				},
-				{{ID: a, Type: ChangeCreate, Desired: dummyResource("svc", "a")}},
 			},
 		}
 
-		mock := &mockProvider{applyFn: func(_ context.Context, _ provider.Operation, r provider.Resource) dcl.Diagnostics {
-			if r.ID == b {
-				return errDiags("boom")
-			}
+		// Both goroutines must reach the barrier for either to proceed.
+		// If execution is sequential, this deadlocks — caught by the
+		// local timeout below rather than the global test timeout.
+		barrier := make(chan struct{}, 2)
+		mock := &mockProvider{applyFn: func(_ context.Context, _ provider.Operation, _ provider.Resource) dcl.Diagnostics {
+			barrier <- struct{}{} // signal arrival
+			<-barrier             // wait for the other
 			return nil
 		}}
 
-		result := ExecuteSequential(context.Background(), plan, g, map[string]provider.Provider{"svc": mock})
+		done := make(chan *ApplyResult, 1)
+		go func() {
+			done <- Execute(context.Background(), plan, g, map[string]provider.Provider{"svc": mock})
+		}()
 
-		rb := findResult(result.Results, b)
-		ra := findResult(result.Results, a)
-		rc := findResult(result.Results, c)
-		if rb.Status != StatusFailed {
-			t.Errorf("B: expected failed, got %s", rb.Status)
+		var result *ApplyResult
+		select {
+		case result = <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("deadlock: layer resources appear to be running sequentially")
 		}
-		if ra.Status != StatusSkipped {
-			t.Errorf("A: expected skipped, got %s", ra.Status)
+
+		if len(result.Results) != 2 {
+			t.Fatalf("expected 2 results, got %d", len(result.Results))
 		}
-		if rc.Status != StatusSuccess {
-			t.Errorf("C: expected success, got %s", rc.Status)
+		for _, r := range result.Results {
+			if r.Status != StatusSuccess {
+				t.Errorf("resource %s: expected success, got %s", r.ID, r.Status)
+			}
 		}
 	})
 }
