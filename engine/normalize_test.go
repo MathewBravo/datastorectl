@@ -77,4 +77,96 @@ func TestNormalizeResources(t *testing.T) {
 			t.Errorf("input[0] should be unchanged, got %s", orig0.Str)
 		}
 	})
+
+	t.Run("missing_provider", func(t *testing.T) {
+		res := provider.Resource{ID: rid("unknown", "a"), Body: provider.NewOrderedMap()}
+
+		_, err := NormalizeResources(context.Background(), []provider.Resource{res}, map[string]provider.Provider{})
+
+		if err == nil {
+			t.Fatal("expected error for missing provider")
+		}
+		if !strings.Contains(err.Error(), "no provider") {
+			t.Errorf("expected 'no provider' in error, got: %s", err.Error())
+		}
+		if !strings.Contains(err.Error(), "unknown") {
+			t.Errorf("expected type name in error, got: %s", err.Error())
+		}
+	})
+
+	t.Run("normalize_error", func(t *testing.T) {
+		mock := &mockNormProvider{normalizeFn: func(_ context.Context, r provider.Resource) (provider.Resource, dcl.Diagnostics) {
+			return r, dcl.Diagnostics{{Severity: dcl.SeverityError, Message: "bad value"}}
+		}}
+
+		res := provider.Resource{ID: rid("svc", "a"), Body: provider.NewOrderedMap()}
+
+		_, err := NormalizeResources(context.Background(), []provider.Resource{res}, map[string]provider.Provider{"svc": mock})
+
+		if err == nil {
+			t.Fatal("expected error for normalization failure")
+		}
+		if !strings.Contains(err.Error(), "svc.a") {
+			t.Errorf("expected resource ID in error, got: %s", err.Error())
+		}
+		if !strings.Contains(err.Error(), "bad value") {
+			t.Errorf("expected diagnostic message in error, got: %s", err.Error())
+		}
+	})
+
+	t.Run("empty_input", func(t *testing.T) {
+		result, err := NormalizeResources(context.Background(), nil, map[string]provider.Provider{})
+
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result) != 0 {
+			t.Errorf("expected empty result, got %d", len(result))
+		}
+	})
+
+	t.Run("preserves_order", func(t *testing.T) {
+		mock := &mockNormProvider{} // returns resource unchanged
+
+		resources := []provider.Resource{
+			{ID: rid("svc", "first"), Body: provider.NewOrderedMap()},
+			{ID: rid("svc", "second"), Body: provider.NewOrderedMap()},
+			{ID: rid("svc", "third"), Body: provider.NewOrderedMap()},
+		}
+
+		result, err := NormalizeResources(context.Background(), resources, map[string]provider.Provider{"svc": mock})
+
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result) != 3 {
+			t.Fatalf("expected 3 results, got %d", len(result))
+		}
+		for i, r := range result {
+			if r.ID != resources[i].ID {
+				t.Errorf("result[%d]: expected %s, got %s", i, resources[i].ID, r.ID)
+			}
+		}
+	})
+
+	t.Run("context_passed_through", func(t *testing.T) {
+		type ctxKey struct{}
+		ctx := context.WithValue(context.Background(), ctxKey{}, "test-value")
+
+		var capturedCtx context.Context
+		mock := &mockNormProvider{normalizeFn: func(c context.Context, r provider.Resource) (provider.Resource, dcl.Diagnostics) {
+			capturedCtx = c
+			return r, nil
+		}}
+
+		res := provider.Resource{ID: rid("svc", "a"), Body: provider.NewOrderedMap()}
+		_, err := NormalizeResources(ctx, []provider.Resource{res}, map[string]provider.Provider{"svc": mock})
+
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if capturedCtx.Value(ctxKey{}) != "test-value" {
+			t.Error("expected context to be passed through to Normalize")
+		}
+	})
 }
