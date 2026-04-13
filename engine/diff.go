@@ -126,3 +126,22 @@ func diffLists(path string, old, new []provider.Value) []ValueDiff {
 	}
 	return diffs
 }
+
+// ResourceDiff holds the result of comparing two resources.
+type ResourceDiff struct {
+	ID    provider.ResourceID
+	Diffs []ValueDiff
+}
+
+// HasChanges reports whether the diff contains any changes.
+func (d ResourceDiff) HasChanges() bool {
+	return len(d.Diffs) > 0
+}
+
+// DiffResources compares desired and live resources by diffing their bodies.
+func DiffResources(desired, live provider.Resource) ResourceDiff {
+	return ResourceDiff{
+		ID:    desired.ID,
+		Diffs: DiffValues("", provider.MapVal(live.Body), provider.MapVal(desired.Body)),
+	}
+}

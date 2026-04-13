@@ -441,6 +441,123 @@ func TestDiffValues_Lists(t *testing.T) {
 	})
 }
 
+func TestDiffResources(t *testing.T) {
+	makeResource := func(typ, name string, body *provider.OrderedMap) provider.Resource {
+		return provider.Resource{
+			ID:   provider.ResourceID{Type: typ, Name: name},
+			Body: body,
+		}
+	}
+
+	makeBody := func(kvs ...any) *provider.OrderedMap {
+		m := provider.NewOrderedMap()
+		for i := 0; i < len(kvs); i += 2 {
+			m.Set(kvs[i].(string), kvs[i+1].(provider.Value))
+		}
+		return m
+	}
+
+	t.Run("no_changes", func(t *testing.T) {
+		desired := makeResource("r", "x", makeBody("a", provider.IntVal(1)))
+		live := makeResource("r", "x", makeBody("a", provider.IntVal(1)))
+		rd := DiffResources(desired, live)
+		if rd.HasChanges() {
+			t.Fatalf("expected no changes, got %d diffs", len(rd.Diffs))
+		}
+	})
+
+	t.Run("attribute_added", func(t *testing.T) {
+		desired := makeResource("r", "x", makeBody("a", provider.IntVal(1), "b", provider.IntVal(2)))
+		live := makeResource("r", "x", makeBody("a", provider.IntVal(1)))
+		rd := DiffResources(desired, live)
+		if len(rd.Diffs) != 1 {
+			t.Fatalf("expected 1 diff, got %d: %v", len(rd.Diffs), rd.Diffs)
+		}
+		if rd.Diffs[0].Kind != DiffAdded || rd.Diffs[0].Path != "b" {
+			t.Fatalf("expected DiffAdded at b, got %s at %q", rd.Diffs[0].Kind, rd.Diffs[0].Path)
+		}
+	})
+
+	t.Run("attribute_removed", func(t *testing.T) {
+		desired := makeResource("r", "x", makeBody("a", provider.IntVal(1)))
+		live := makeResource("r", "x", makeBody("a", provider.IntVal(1), "b", provider.IntVal(2)))
+		rd := DiffResources(desired, live)
+		if len(rd.Diffs) != 1 {
+			t.Fatalf("expected 1 diff, got %d: %v", len(rd.Diffs), rd.Diffs)
+		}
+		if rd.Diffs[0].Kind != DiffRemoved || rd.Diffs[0].Path != "b" {
+			t.Fatalf("expected DiffRemoved at b, got %s at %q", rd.Diffs[0].Kind, rd.Diffs[0].Path)
+		}
+	})
+
+	t.Run("attribute_modified", func(t *testing.T) {
+		desired := makeResource("r", "x", makeBody("a", provider.IntVal(2)))
+		live := makeResource("r", "x", makeBody("a", provider.IntVal(1)))
+		rd := DiffResources(desired, live)
+		if len(rd.Diffs) != 1 {
+			t.Fatalf("expected 1 diff, got %d: %v", len(rd.Diffs), rd.Diffs)
+		}
+		if rd.Diffs[0].Kind != DiffModified || rd.Diffs[0].Path != "a" {
+			t.Fatalf("expected DiffModified at a, got %s at %q", rd.Diffs[0].Kind, rd.Diffs[0].Path)
+		}
+	})
+
+	t.Run("nested_change", func(t *testing.T) {
+		innerDesired := provider.NewOrderedMap()
+		innerDesired.Set("x", provider.IntVal(2))
+		innerLive := provider.NewOrderedMap()
+		innerLive.Set("x", provider.IntVal(1))
+		desired := makeResource("r", "x", makeBody("m", provider.MapVal(innerDesired)))
+		live := makeResource("r", "x", makeBody("m", provider.MapVal(innerLive)))
+		rd := DiffResources(desired, live)
+		if len(rd.Diffs) != 1 {
+			t.Fatalf("expected 1 diff, got %d: %v", len(rd.Diffs), rd.Diffs)
+		}
+		if rd.Diffs[0].Kind != DiffModified || rd.Diffs[0].Path != "m.x" {
+			t.Fatalf("expected DiffModified at m.x, got %s at %q", rd.Diffs[0].Kind, rd.Diffs[0].Path)
+		}
+	})
+
+	t.Run("multiple_changes", func(t *testing.T) {
+		desired := makeResource("r", "x", makeBody("a", provider.IntVal(9), "c", provider.IntVal(4)))
+		live := makeResource("r", "x", makeBody("a", provider.IntVal(1), "b", provider.IntVal(2)))
+		rd := DiffResources(desired, live)
+		if len(rd.Diffs) != 3 {
+			t.Fatalf("expected 3 diffs, got %d: %v", len(rd.Diffs), rd.Diffs)
+		}
+		if rd.Diffs[0].Kind != DiffModified || rd.Diffs[0].Path != "a" {
+			t.Fatalf("diffs[0]: expected DiffModified at a, got %s at %q", rd.Diffs[0].Kind, rd.Diffs[0].Path)
+		}
+		if rd.Diffs[1].Kind != DiffRemoved || rd.Diffs[1].Path != "b" {
+			t.Fatalf("diffs[1]: expected DiffRemoved at b, got %s at %q", rd.Diffs[1].Kind, rd.Diffs[1].Path)
+		}
+		if rd.Diffs[2].Kind != DiffAdded || rd.Diffs[2].Path != "c" {
+			t.Fatalf("diffs[2]: expected DiffAdded at c, got %s at %q", rd.Diffs[2].Kind, rd.Diffs[2].Path)
+		}
+	})
+
+	t.Run("both_empty", func(t *testing.T) {
+		desired := makeResource("r", "x", provider.NewOrderedMap())
+		live := makeResource("r", "x", provider.NewOrderedMap())
+		rd := DiffResources(desired, live)
+		if rd.HasChanges() {
+			t.Fatalf("expected no changes, got %d diffs", len(rd.Diffs))
+		}
+	})
+
+	t.Run("uses_desired_id", func(t *testing.T) {
+		desired := makeResource("typeA", "nameA", makeBody("a", provider.IntVal(1)))
+		live := makeResource("typeB", "nameB", makeBody("a", provider.IntVal(1)))
+		rd := DiffResources(desired, live)
+		if rd.HasChanges() {
+			t.Fatalf("expected no changes, got %d diffs", len(rd.Diffs))
+		}
+		if rd.ID.Type != "typeA" || rd.ID.Name != "nameA" {
+			t.Fatalf("expected desired ID (typeA.nameA), got %s", rd.ID)
+		}
+	})
+}
+
 // makeMapVal builds a MapVal with a single key-value pair for test brevity.
 func makeMapVal(key string, val provider.Value) provider.Value {
 	m := provider.NewOrderedMap()
