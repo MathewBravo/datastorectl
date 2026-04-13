@@ -142,6 +142,9 @@ func TestDiffValues_ComplexFallback(t *testing.T) {
 		if diffs[0].Kind != DiffModified {
 			t.Fatalf("expected DiffModified, got %s", diffs[0].Kind)
 		}
+		if diffs[0].Path != "items[0]" {
+			t.Fatalf("expected path %q, got %q", "items[0]", diffs[0].Path)
+		}
 	})
 
 	t.Run("different_maps", func(t *testing.T) {
@@ -296,6 +299,135 @@ func TestDiffValues_Maps(t *testing.T) {
 	t.Run("map_to_non_map", func(t *testing.T) {
 		old := makeMapVal("a", provider.IntVal(1))
 		new := provider.StringVal("not a map")
+		diffs := DiffValues("root", old, new)
+		if len(diffs) != 1 {
+			t.Fatalf("expected 1 diff, got %d: %v", len(diffs), diffs)
+		}
+		if diffs[0].Kind != DiffModified {
+			t.Fatalf("expected DiffModified, got %s", diffs[0].Kind)
+		}
+		if diffs[0].Path != "root" {
+			t.Fatalf("expected path %q, got %q", "root", diffs[0].Path)
+		}
+	})
+}
+
+func TestDiffValues_Lists(t *testing.T) {
+	t.Run("element_added", func(t *testing.T) {
+		old := provider.ListVal([]provider.Value{provider.IntVal(1)})
+		new := provider.ListVal([]provider.Value{provider.IntVal(1), provider.IntVal(2)})
+		diffs := DiffValues("root", old, new)
+		if len(diffs) != 1 {
+			t.Fatalf("expected 1 diff, got %d: %v", len(diffs), diffs)
+		}
+		if diffs[0].Kind != DiffAdded || diffs[0].Path != "root[1]" {
+			t.Fatalf("expected DiffAdded at root[1], got %s at %q", diffs[0].Kind, diffs[0].Path)
+		}
+	})
+
+	t.Run("element_removed", func(t *testing.T) {
+		old := provider.ListVal([]provider.Value{provider.IntVal(1), provider.IntVal(2)})
+		new := provider.ListVal([]provider.Value{provider.IntVal(1)})
+		diffs := DiffValues("root", old, new)
+		if len(diffs) != 1 {
+			t.Fatalf("expected 1 diff, got %d: %v", len(diffs), diffs)
+		}
+		if diffs[0].Kind != DiffRemoved || diffs[0].Path != "root[1]" {
+			t.Fatalf("expected DiffRemoved at root[1], got %s at %q", diffs[0].Kind, diffs[0].Path)
+		}
+	})
+
+	t.Run("element_modified", func(t *testing.T) {
+		old := provider.ListVal([]provider.Value{provider.IntVal(1)})
+		new := provider.ListVal([]provider.Value{provider.IntVal(2)})
+		diffs := DiffValues("root", old, new)
+		if len(diffs) != 1 {
+			t.Fatalf("expected 1 diff, got %d: %v", len(diffs), diffs)
+		}
+		if diffs[0].Kind != DiffModified || diffs[0].Path != "root[0]" {
+			t.Fatalf("expected DiffModified at root[0], got %s at %q", diffs[0].Kind, diffs[0].Path)
+		}
+	})
+
+	t.Run("multiple_changes", func(t *testing.T) {
+		old := provider.ListVal([]provider.Value{provider.IntVal(1), provider.IntVal(2), provider.IntVal(3)})
+		new := provider.ListVal([]provider.Value{provider.IntVal(9), provider.IntVal(2)})
+		diffs := DiffValues("root", old, new)
+		if len(diffs) != 2 {
+			t.Fatalf("expected 2 diffs, got %d: %v", len(diffs), diffs)
+		}
+		if diffs[0].Kind != DiffModified || diffs[0].Path != "root[0]" {
+			t.Fatalf("diffs[0]: expected DiffModified at root[0], got %s at %q", diffs[0].Kind, diffs[0].Path)
+		}
+		if diffs[1].Kind != DiffRemoved || diffs[1].Path != "root[2]" {
+			t.Fatalf("diffs[1]: expected DiffRemoved at root[2], got %s at %q", diffs[1].Kind, diffs[1].Path)
+		}
+	})
+
+	t.Run("nested_list", func(t *testing.T) {
+		old := provider.ListVal([]provider.Value{
+			provider.ListVal([]provider.Value{provider.IntVal(1)}),
+		})
+		new := provider.ListVal([]provider.Value{
+			provider.ListVal([]provider.Value{provider.IntVal(2)}),
+		})
+		diffs := DiffValues("root", old, new)
+		if len(diffs) != 1 {
+			t.Fatalf("expected 1 diff, got %d: %v", len(diffs), diffs)
+		}
+		if diffs[0].Kind != DiffModified || diffs[0].Path != "root[0][0]" {
+			t.Fatalf("expected DiffModified at root[0][0], got %s at %q", diffs[0].Kind, diffs[0].Path)
+		}
+	})
+
+	t.Run("nested_map_in_list", func(t *testing.T) {
+		old := provider.ListVal([]provider.Value{makeMapVal("a", provider.IntVal(1))})
+		new := provider.ListVal([]provider.Value{makeMapVal("a", provider.IntVal(2))})
+		diffs := DiffValues("root", old, new)
+		if len(diffs) != 1 {
+			t.Fatalf("expected 1 diff, got %d: %v", len(diffs), diffs)
+		}
+		if diffs[0].Kind != DiffModified || diffs[0].Path != "root[0].a" {
+			t.Fatalf("expected DiffModified at root[0].a, got %s at %q", diffs[0].Kind, diffs[0].Path)
+		}
+	})
+
+	t.Run("empty_to_populated", func(t *testing.T) {
+		old := provider.ListVal([]provider.Value{})
+		new := provider.ListVal([]provider.Value{provider.IntVal(1)})
+		diffs := DiffValues("root", old, new)
+		if len(diffs) != 1 {
+			t.Fatalf("expected 1 diff, got %d: %v", len(diffs), diffs)
+		}
+		if diffs[0].Kind != DiffAdded || diffs[0].Path != "root[0]" {
+			t.Fatalf("expected DiffAdded at root[0], got %s at %q", diffs[0].Kind, diffs[0].Path)
+		}
+	})
+
+	t.Run("populated_to_empty", func(t *testing.T) {
+		old := provider.ListVal([]provider.Value{provider.IntVal(1)})
+		new := provider.ListVal([]provider.Value{})
+		diffs := DiffValues("root", old, new)
+		if len(diffs) != 1 {
+			t.Fatalf("expected 1 diff, got %d: %v", len(diffs), diffs)
+		}
+		if diffs[0].Kind != DiffRemoved || diffs[0].Path != "root[0]" {
+			t.Fatalf("expected DiffRemoved at root[0], got %s at %q", diffs[0].Kind, diffs[0].Path)
+		}
+	})
+
+	t.Run("both_empty", func(t *testing.T) {
+		old := provider.ListVal([]provider.Value{})
+		new := provider.ListVal([]provider.Value{})
+		diffs := DiffValues("root", old, new)
+		if len(diffs) != 0 {
+			t.Fatalf("expected 0 diffs, got %d: %v", len(diffs), diffs)
+		}
+	})
+
+	t.Run("list_to_non_list", func(t *testing.T) {
+		old := provider.ListVal([]provider.Value{provider.IntVal(1)})
+		new := provider.StringVal("not a list")
 		diffs := DiffValues("root", old, new)
 		if len(diffs) != 1 {
 			t.Fatalf("expected 1 diff, got %d: %v", len(diffs), diffs)
