@@ -6,6 +6,9 @@ import (
 
 	"github.com/MathewBravo/datastorectl/config"
 	"github.com/spf13/cobra"
+
+	// Register built-in providers.
+	_ "github.com/MathewBravo/datastorectl/providers/opensearch"
 )
 
 var rootCmd = &cobra.Command{
