@@ -32,6 +32,9 @@ func init() {
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {
+		if exit, ok := err.(errExit); ok {
+			os.Exit(exit.code)
+		}
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
