@@ -25,11 +25,11 @@ type Provider struct {
 }
 
 // Configure validates the provider configuration and creates the HTTP client.
-func (p *Provider) Configure(_ context.Context, config *provider.OrderedMap) dcl.Diagnostics {
+func (p *Provider) Configure(ctx context.Context, config *provider.OrderedMap) dcl.Diagnostics {
 	if config == nil {
 		return dcl.Diagnostics{{
 			Severity: dcl.SeverityError,
-			Message:  `opensearch provider requires configuration — set at minimum "endpoint", "auth", "username", and "password"`,
+			Message:  `opensearch provider requires configuration — set at minimum "endpoint", "auth", and the credentials for your chosen auth method`,
 		}}
 	}
 
@@ -44,33 +44,32 @@ func (p *Provider) Configure(_ context.Context, config *provider.OrderedMap) dcl
 	}
 	endpoint := endpointVal.Str
 
-	// auth — required, must be "basic".
+	// auth — required, must be "basic" or "sigv4".
 	authVal, ok := config.Get("auth")
 	if !ok || authVal.Kind != provider.KindString || authVal.Str == "" {
 		return dcl.Diagnostics{{
 			Severity:   dcl.SeverityError,
-			Message:    `"auth" is required — set it to "basic" to use username/password authentication`,
-			Suggestion: `add auth = "basic" to the opensearch provider block`,
+			Message:    `"auth" is required — set it to "basic" for username/password or "sigv4" for AWS IAM authentication`,
+			Suggestion: `add auth = "basic" or auth = "sigv4" to the opensearch provider block`,
 		}}
 	}
 	auth := authVal.Str
 
 	switch auth {
 	case "basic":
-		// OK — fall through to credential validation below.
+		return p.configureBasicAuth(endpoint, config)
 	case "sigv4":
-		return dcl.Diagnostics{{
-			Severity: dcl.SeverityError,
-			Message:  `auth is "sigv4" but sigv4 support is not yet implemented — use "basic" for now`,
-		}}
+		return p.configureSigV4(ctx, endpoint, config)
 	default:
 		return dcl.Diagnostics{{
 			Severity: dcl.SeverityError,
-			Message:  fmt.Sprintf(`auth must be "basic" (sigv4 support is planned but not yet available), got %q`, auth),
+			Message:  fmt.Sprintf(`auth must be "basic" or "sigv4", got %q`, auth),
 		}}
 	}
+}
 
-	// username — required for basic auth.
+// configureBasicAuth validates username/password and creates a basic-auth client.
+func (p *Provider) configureBasicAuth(endpoint string, config *provider.OrderedMap) dcl.Diagnostics {
 	usernameVal, ok := config.Get("username")
 	if !ok || usernameVal.Kind != provider.KindString || usernameVal.Str == "" {
 		return dcl.Diagnostics{{
@@ -79,9 +78,7 @@ func (p *Provider) Configure(_ context.Context, config *provider.OrderedMap) dcl
 			Suggestion: `add username = "admin" to the opensearch provider block`,
 		}}
 	}
-	username := usernameVal.Str
 
-	// password — required for basic auth.
 	passwordVal, ok := config.Get("password")
 	if !ok || passwordVal.Kind != provider.KindString || passwordVal.Str == "" {
 		return dcl.Diagnostics{{
@@ -90,13 +87,34 @@ func (p *Provider) Configure(_ context.Context, config *provider.OrderedMap) dcl
 			Suggestion: `add password = secret("opensearch_password") to the opensearch provider block`,
 		}}
 	}
-	password := passwordVal.Str
 
-	client, err := NewClient(endpoint, username, password)
+	client, err := NewClient(endpoint, usernameVal.Str, passwordVal.Str)
 	if err != nil {
 		return dcl.Diagnostics{{
 			Severity: dcl.SeverityError,
 			Message:  fmt.Sprintf("failed to create opensearch client: %s", err),
+		}}
+	}
+	p.client = client
+	return nil
+}
+
+// configureSigV4 validates the region field and creates a SigV4-signing client.
+func (p *Provider) configureSigV4(ctx context.Context, endpoint string, config *provider.OrderedMap) dcl.Diagnostics {
+	regionVal, ok := config.Get("region")
+	if !ok || regionVal.Kind != provider.KindString || regionVal.Str == "" {
+		return dcl.Diagnostics{{
+			Severity:   dcl.SeverityError,
+			Message:    `"region" is required when auth is "sigv4" — this is the AWS region where your OpenSearch domain is deployed (e.g. "us-east-1")`,
+			Suggestion: `add region = "us-east-1" to the opensearch provider block`,
+		}}
+	}
+
+	client, err := NewSigV4Client(ctx, endpoint, regionVal.Str)
+	if err != nil {
+		return dcl.Diagnostics{{
+			Severity: dcl.SeverityError,
+			Message:  fmt.Sprintf("failed to create opensearch client with SigV4 auth: %s", err),
 		}}
 	}
 	p.client = client

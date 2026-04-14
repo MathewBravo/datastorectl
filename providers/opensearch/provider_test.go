@@ -54,13 +54,18 @@ func TestConfigure(t *testing.T) {
 			name:      "invalid_auth",
 			config:    configMap("endpoint", "https://localhost:9200", "auth", "oauth"),
 			wantErr:   true,
-			errSubstr: `"basic"`,
+			errSubstr: `"basic" or "sigv4"`,
 		},
 		{
-			name:      "sigv4_not_implemented",
-			config:    configMap("endpoint", "https://localhost:9200", "auth", "sigv4"),
+			name:      "sigv4_missing_region",
+			config:    configMap("endpoint", "https://search.us-east-1.es.amazonaws.com", "auth", "sigv4"),
 			wantErr:   true,
-			errSubstr: "not yet implemented",
+			errSubstr: "region",
+		},
+		{
+			name:    "sigv4_success",
+			config:  configMap("endpoint", "https://search.us-east-1.es.amazonaws.com", "auth", "sigv4", "region", "us-east-1"),
+			wantErr: false,
 		},
 		{
 			name:      "basic_missing_username",
