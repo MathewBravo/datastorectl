@@ -75,9 +75,23 @@ func (e *Engine) plan(ctx context.Context, file *dcl.File, configs map[string]*p
 	}
 
 	// 5. Discover live state from each unique provider.
-	live, err := discover(ctx, providers)
+	allLive, err := discover(ctx, providers)
 	if err != nil {
 		return nil, fmt.Errorf("discover: %w", err)
+	}
+
+	// 5b. Scope live resources to only types present in desired state.
+	// This prevents the engine from planning deletes for resource types
+	// the user didn't declare (e.g., built-in OpenSearch users).
+	desiredTypes := make(map[string]struct{}, len(desired))
+	for _, r := range desired {
+		desiredTypes[r.ID.Type] = struct{}{}
+	}
+	var live []provider.Resource
+	for _, r := range allLive {
+		if _, ok := desiredTypes[r.ID.Type]; ok {
+			live = append(live, r)
+		}
 	}
 
 	// 6. Build the dependency graph BEFORE resolution (needs KindReference values).
