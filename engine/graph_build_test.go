@@ -163,7 +163,7 @@ func TestBuildDependencyGraphWithOrdering(t *testing.T) {
 	t.Run("single_ordering", func(t *testing.T) {
 		idx := makeResource("index", "hot")
 		ism := makeResource("ism_policy", "delete")
-		orderings := []TypeOrdering{{Before: "index", After: "ism_policy"}}
+		orderings := []provider.TypeOrdering{{Before: "index", After: "ism_policy"}}
 		g, err := BuildDependencyGraphWithOrdering([]provider.Resource{idx, ism}, orderings)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -176,7 +176,7 @@ func TestBuildDependencyGraphWithOrdering(t *testing.T) {
 
 	t.Run("ordering_no_matching_types", func(t *testing.T) {
 		db := makeResource("db", "main")
-		orderings := []TypeOrdering{{Before: "foo", After: "bar"}}
+		orderings := []provider.TypeOrdering{{Before: "foo", After: "bar"}}
 		g, err := BuildDependencyGraphWithOrdering([]provider.Resource{db}, orderings)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -191,7 +191,7 @@ func TestBuildDependencyGraphWithOrdering(t *testing.T) {
 
 	t.Run("ordering_one_side_empty", func(t *testing.T) {
 		idx := makeResource("index", "hot")
-		orderings := []TypeOrdering{{Before: "index", After: "ism_policy"}}
+		orderings := []provider.TypeOrdering{{Before: "index", After: "ism_policy"}}
 		g, err := BuildDependencyGraphWithOrdering([]provider.Resource{idx}, orderings)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -205,7 +205,7 @@ func TestBuildDependencyGraphWithOrdering(t *testing.T) {
 		db := makeResource("db", "main")
 		cache := makeResource("cache", "redis")
 		app := makeResource("app", "web", rid("db", "main"))
-		orderings := []TypeOrdering{{Before: "db", After: "cache"}}
+		orderings := []provider.TypeOrdering{{Before: "db", After: "cache"}}
 		g, err := BuildDependencyGraphWithOrdering([]provider.Resource{db, cache, app}, orderings)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -226,7 +226,7 @@ func TestBuildDependencyGraphWithOrdering(t *testing.T) {
 		a := makeResource("a", "svc")
 		b := makeResource("b", "svc")
 		c := makeResource("c", "svc")
-		orderings := []TypeOrdering{
+		orderings := []provider.TypeOrdering{
 			{Before: "a", After: "b"},
 			{Before: "b", After: "c"},
 		}
@@ -249,7 +249,7 @@ func TestBuildDependencyGraphWithOrdering(t *testing.T) {
 		idx2 := makeResource("index", "cold")
 		ism1 := makeResource("ism_policy", "delete")
 		ism2 := makeResource("ism_policy", "archive")
-		orderings := []TypeOrdering{{Before: "index", After: "ism_policy"}}
+		orderings := []provider.TypeOrdering{{Before: "index", After: "ism_policy"}}
 		g, err := BuildDependencyGraphWithOrdering(
 			[]provider.Resource{idx1, idx2, ism1, ism2}, orderings,
 		)

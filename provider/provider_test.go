@@ -27,6 +27,31 @@ func TestOperationString(t *testing.T) {
 	}
 }
 
+type stubTypeOrderer struct{ stubProvider }
+
+func (stubTypeOrderer) TypeOrderings() []TypeOrdering {
+	return []TypeOrdering{{Before: "role", After: "role_mapping"}}
+}
+
+var _ TypeOrderer = stubTypeOrderer{}
+
+func TestTypeOrdererOptional(t *testing.T) {
+	var p Provider = stubTypeOrderer{}
+	to, ok := p.(TypeOrderer)
+	if !ok {
+		t.Fatal("expected stubTypeOrderer to satisfy TypeOrderer")
+	}
+	orderings := to.TypeOrderings()
+	if len(orderings) != 1 || orderings[0].Before != "role" {
+		t.Errorf("unexpected orderings: %v", orderings)
+	}
+
+	var plain Provider = stubProvider{}
+	if _, ok := plain.(TypeOrderer); ok {
+		t.Error("stubProvider should not satisfy TypeOrderer")
+	}
+}
+
 func TestOperationConstants(t *testing.T) {
 	tests := []struct {
 		op   Operation

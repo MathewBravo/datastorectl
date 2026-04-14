@@ -54,7 +54,7 @@ func TestConfigureProviders(t *testing.T) {
 		cfg.Set("host", provider.StringVal("localhost"))
 		configs := map[string]*provider.OrderedMap{"cptest1": cfg}
 
-		result, err := ConfigureProviders(context.Background(), resources, configs)
+		result, _, err := ConfigureProviders(context.Background(), resources, configs)
 
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -93,7 +93,7 @@ func TestConfigureProviders(t *testing.T) {
 			{ID: rid("cptest2b_acl", "y"), Body: provider.NewOrderedMap()},
 		}
 
-		result, err := ConfigureProviders(context.Background(), resources, map[string]*provider.OrderedMap{})
+		result, _, err := ConfigureProviders(context.Background(), resources, map[string]*provider.OrderedMap{})
 
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -117,7 +117,7 @@ func TestConfigureProviders(t *testing.T) {
 			{ID: rid("cptest3unknown_thing", "a"), Body: provider.NewOrderedMap()},
 		}
 
-		_, err := ConfigureProviders(context.Background(), resources, map[string]*provider.OrderedMap{})
+		_, _, err := ConfigureProviders(context.Background(), resources, map[string]*provider.OrderedMap{})
 
 		if err == nil {
 			t.Fatal("expected error for unknown provider")
@@ -140,7 +140,7 @@ func TestConfigureProviders(t *testing.T) {
 			{ID: rid("cptest4_thing", "a"), Body: provider.NewOrderedMap()},
 		}
 
-		_, err := ConfigureProviders(context.Background(), resources, map[string]*provider.OrderedMap{})
+		_, _, err := ConfigureProviders(context.Background(), resources, map[string]*provider.OrderedMap{})
 
 		if err == nil {
 			t.Fatal("expected error for configure failure")
@@ -165,7 +165,7 @@ func TestConfigureProviders(t *testing.T) {
 		}
 
 		// No config entry for "cptest5" — should pass nil to Configure.
-		result, err := ConfigureProviders(context.Background(), resources, map[string]*provider.OrderedMap{})
+		result, _, err := ConfigureProviders(context.Background(), resources, map[string]*provider.OrderedMap{})
 
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -195,7 +195,7 @@ func TestConfigureProviders(t *testing.T) {
 			{ID: rid("cptest6_thing", "a"), Body: provider.NewOrderedMap()},
 		}
 
-		_, err := ConfigureProviders(ctx, resources, map[string]*provider.OrderedMap{})
+		_, _, err := ConfigureProviders(ctx, resources, map[string]*provider.OrderedMap{})
 
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -204,4 +204,56 @@ func TestConfigureProviders(t *testing.T) {
 			t.Error("expected context to be passed through to Configure")
 		}
 	})
+
+	t.Run("collects_type_orderings", func(t *testing.T) {
+		provider.Register("cptest7", func() provider.Provider {
+			return &mockTypeOrdererProvider{
+				orderings: []provider.TypeOrdering{
+					{Before: "cptest7_role", After: "cptest7_mapping"},
+				},
+			}
+		})
+
+		resources := []provider.Resource{
+			{ID: rid("cptest7_role", "a"), Body: provider.NewOrderedMap()},
+		}
+
+		_, orderings, err := ConfigureProviders(context.Background(), resources, map[string]*provider.OrderedMap{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(orderings) != 1 {
+			t.Fatalf("expected 1 ordering, got %d", len(orderings))
+		}
+		if orderings[0].Before != "cptest7_role" || orderings[0].After != "cptest7_mapping" {
+			t.Errorf("unexpected ordering: %+v", orderings[0])
+		}
+	})
+
+	t.Run("no_orderings_when_not_type_orderer", func(t *testing.T) {
+		provider.Register("cptest8", func() provider.Provider {
+			return &mockConfigProvider{}
+		})
+
+		resources := []provider.Resource{
+			{ID: rid("cptest8_thing", "a"), Body: provider.NewOrderedMap()},
+		}
+
+		_, orderings, err := ConfigureProviders(context.Background(), resources, map[string]*provider.OrderedMap{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(orderings) != 0 {
+			t.Errorf("expected 0 orderings for non-TypeOrderer provider, got %d", len(orderings))
+		}
+	})
+}
+
+type mockTypeOrdererProvider struct {
+	mockConfigProvider
+	orderings []provider.TypeOrdering
+}
+
+func (m *mockTypeOrdererProvider) TypeOrderings() []provider.TypeOrdering {
+	return m.orderings
 }

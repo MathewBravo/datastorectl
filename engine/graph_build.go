@@ -8,13 +8,6 @@ import (
 	"github.com/MathewBravo/datastorectl/provider"
 )
 
-// TypeOrdering declares that resources of type Before should be
-// processed before resources of type After.
-type TypeOrdering struct {
-	Before string
-	After  string
-}
-
 // BuildDependencyGraph builds a dependency graph from cross-resource
 // references. Returns an error if any reference targets a resource
 // not in the input slice.
@@ -27,7 +20,7 @@ func BuildDependencyGraph(resources []provider.Resource) (*Graph, error) {
 // Returns an error if any reference targets a resource not in the
 // input slice. Orderings mentioning types with no matching resources
 // are silently ignored.
-func BuildDependencyGraphWithOrdering(resources []provider.Resource, orderings []TypeOrdering) (*Graph, error) {
+func BuildDependencyGraphWithOrdering(resources []provider.Resource, orderings []provider.TypeOrdering) (*Graph, error) {
 	g := NewGraph()
 
 	// Pass 1: register nodes, build indexes.
