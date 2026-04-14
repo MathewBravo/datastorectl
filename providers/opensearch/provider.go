@@ -16,7 +16,8 @@ func init() {
 				"opensearch_internal_user": &internalUserHandler{},
 				"opensearch_role_mapping":  &roleMappingHandler{},
 				"opensearch_ism_policy":    &ismPolicyHandler{},
-				"opensearch_component_template": &componentTemplateHandler{},
+				"opensearch_component_template":        &componentTemplateHandler{},
+				"opensearch_composable_index_template": &composableIndexTemplateHandler{},
 			},
 		}
 	})
