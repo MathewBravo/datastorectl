@@ -183,6 +183,52 @@ func DefaultConfigPath() string {
 	return filepath.Join(home, ".datastorectl", "config.dcl")
 }
 
+// DetectMultipleContexts scans resource bodies for the "context" attribute
+// (before stripping) and returns the unique context names found. The bool
+// is true when more than one distinct context is referenced.
+func DetectMultipleContexts(resources []provider.Resource) ([]string, bool) {
+	seen := map[string]struct{}{}
+	var names []string
+	for _, r := range resources {
+		v, ok := r.Body.Get("context")
+		if !ok || v.Kind != provider.KindString {
+			continue
+		}
+		if _, dup := seen[v.Str]; !dup {
+			seen[v.Str] = struct{}{}
+			names = append(names, v.Str)
+		}
+	}
+	return names, len(names) > 1
+}
+
+// FilterByContext keeps only the resources that reference contextName and only
+// the contexts whose name matches. Returns an error if no resources match.
+func FilterByContext(resources []provider.Resource, contexts []Context, contextName string) ([]provider.Resource, []Context, error) {
+	var filteredResources []provider.Resource
+	for _, r := range resources {
+		v, ok := r.Body.Get("context")
+		if !ok || v.Kind != provider.KindString {
+			continue
+		}
+		if v.Str == contextName {
+			filteredResources = append(filteredResources, r)
+		}
+	}
+	if len(filteredResources) == 0 {
+		return nil, nil, fmt.Errorf("no resources target context %q", contextName)
+	}
+
+	var filteredContexts []Context
+	for _, ctx := range contexts {
+		if ctx.Name == contextName {
+			filteredContexts = append(filteredContexts, ctx)
+		}
+	}
+
+	return filteredResources, filteredContexts, nil
+}
+
 // ResolveConfigSecrets walks each config's OrderedMap and resolves secret()
 // function calls via the given resolver. Configs are modified in place.
 func ResolveConfigSecrets(ctx context.Context, configs map[string]*provider.OrderedMap, resolver SecretResolver) error {
