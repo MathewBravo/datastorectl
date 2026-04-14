@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/MathewBravo/datastorectl/config"
 	"github.com/MathewBravo/datastorectl/dcl"
 	"github.com/MathewBravo/datastorectl/provider"
 )
@@ -22,41 +23,76 @@ type planResult struct {
 	providers map[string]provider.Provider
 }
 
-// plan runs the full planning pipeline: convert → configure → discover →
+// plan runs the full planning pipeline: split → convert → configure → discover →
 // build graph → resolve references → resolve secrets → normalize → build plan.
 func (e *Engine) plan(ctx context.Context, file *dcl.File, configs map[string]*provider.OrderedMap) (*planResult, error) {
-	// 1. Convert DCL file into a flat resource set.
-	resourceSet, err := ConvertFile(file)
+	if file == nil {
+		return nil, fmt.Errorf("convert: cannot convert nil file")
+	}
+	if file.Diagnostics.HasErrors() {
+		return nil, fmt.Errorf("convert: file has parse errors: %s", file.Diagnostics.Error())
+	}
+
+	// 1. Split file into context and resource blocks.
+	contextBlocks, resourceBlocks := config.SplitFile(file)
+
+	// 2. Convert resource blocks (not context blocks) into a flat resource set.
+	resourceSet, err := ConvertBlocks(resourceBlocks)
 	if err != nil {
 		return nil, fmt.Errorf("convert: %w", err)
 	}
+	desired := resourceSet.Resources
 
-	// 2. Look up, instantiate, and configure providers.
-	providers, orderings, err := ConfigureProviders(ctx, resourceSet.Resources, configs)
+	// 3. If file has context blocks, parse them and wire up configs.
+	if len(contextBlocks) > 0 {
+		contexts, err := config.ParseContexts(contextBlocks)
+		if err != nil {
+			return nil, fmt.Errorf("parse contexts: %w", err)
+		}
+
+		// Strip context attribute from resources.
+		desired, err = config.ResolveResourceContexts(desired, contexts)
+		if err != nil {
+			return nil, fmt.Errorf("resolve resource contexts: %w", err)
+		}
+
+		// Build configs from contexts unless caller provided explicit configs.
+		if configs == nil {
+			configs, err = config.BuildConfigs(contexts)
+			if err != nil {
+				return nil, fmt.Errorf("build configs: %w", err)
+			}
+			if err := config.ResolveConfigSecrets(ctx, configs, e.SecretResolver); err != nil {
+				return nil, fmt.Errorf("resolve config secrets: %w", err)
+			}
+		}
+	}
+
+	// 4. Look up, instantiate, and configure providers.
+	providers, orderings, err := ConfigureProviders(ctx, desired, configs)
 	if err != nil {
 		return nil, fmt.Errorf("configure providers: %w", err)
 	}
 
-	// 3. Discover live state from each unique provider.
+	// 5. Discover live state from each unique provider.
 	live, err := discover(ctx, providers)
 	if err != nil {
 		return nil, fmt.Errorf("discover: %w", err)
 	}
 
-	// 4. Build the dependency graph BEFORE resolution (needs KindReference values).
-	graph, err := BuildDependencyGraphWithOrdering(resourceSet.Resources, orderings)
+	// 6. Build the dependency graph BEFORE resolution (needs KindReference values).
+	graph, err := BuildDependencyGraphWithOrdering(desired, orderings)
 	if err != nil {
 		return nil, fmt.Errorf("build dependency graph: %w", err)
 	}
 
-	// 5. Build an index of desired resources for reference resolution.
-	desired := resourceSet.Resources
+	// 7. Build an index of desired resources for reference resolution.
 	index := make(map[provider.ResourceID]provider.Resource, len(desired))
 	for _, r := range desired {
 		index[r.ID] = r
 	}
 
-	// 6. Resolve cross-resource references in desired resources.
+	// 8. Resolve cross-resource references in desired resources.
 	for i, r := range desired {
 		resolved, err := ResolveReferences(r, index)
 		if err != nil {
@@ -65,7 +101,7 @@ func (e *Engine) plan(ctx context.Context, file *dcl.File, configs map[string]*p
 		desired[i] = resolved
 	}
 
-	// 7. Resolve secret function calls in desired resources.
+	// 9. Resolve secret function calls in desired resources.
 	for i, r := range desired {
 		resolved, err := ResolveSecrets(ctx, r, e.SecretResolver)
 		if err != nil {
@@ -74,22 +110,22 @@ func (e *Engine) plan(ctx context.Context, file *dcl.File, configs map[string]*p
 		desired[i] = resolved
 	}
 
-	// 8. Normalize desired resources.
+	// 10. Normalize desired resources.
 	normalizedDesired, err := NormalizeResources(ctx, desired, providers)
 	if err != nil {
 		return nil, fmt.Errorf("normalize desired: %w", err)
 	}
 
-	// 9. Normalize live resources.
+	// 11. Normalize live resources.
 	normalizedLive, err := NormalizeResources(ctx, live, providers)
 	if err != nil {
 		return nil, fmt.Errorf("normalize live: %w", err)
 	}
 
-	// 10. Build the plan by diffing desired against live.
+	// 12. Build the plan by diffing desired against live.
 	plan := BuildPlan(normalizedDesired, normalizedLive)
 
-	// 11. Add live-only (delete) resources to the graph so OrderPlan includes them.
+	// 13. Add live-only (delete) resources to the graph so OrderPlan includes them.
 	for _, c := range plan.Changes {
 		if c.Type == ChangeDelete && !graph.HasNode(c.ID) {
 			graph.AddNode(c.ID)

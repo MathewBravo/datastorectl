@@ -23,11 +23,17 @@ func ConvertFile(file *dcl.File) (*ResourceSet, error) {
 	if file.Diagnostics.HasErrors() {
 		return nil, fmt.Errorf("file has parse errors: %s", file.Diagnostics.Error())
 	}
+	return ConvertBlocks(file.Blocks)
+}
 
-	resources := make([]provider.Resource, 0, len(file.Blocks))
+// ConvertBlocks converts a slice of DCL blocks into a ResourceSet.
+// Unlike ConvertFile, it operates on pre-filtered blocks (e.g., after
+// context blocks have been separated out by config.SplitFile).
+func ConvertBlocks(blocks []dcl.Block) (*ResourceSet, error) {
+	resources := make([]provider.Resource, 0, len(blocks))
 	seen := map[provider.ResourceID]struct{}{}
 
-	for i, block := range file.Blocks {
+	for i, block := range blocks {
 		r, err := blockToResource(block)
 		if err != nil {
 			return nil, fmt.Errorf("block %d (%s %q): %w", i, block.Type, block.Label, err)
