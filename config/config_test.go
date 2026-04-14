@@ -408,6 +408,88 @@ func TestDefaultConfigPath(t *testing.T) {
 	}
 }
 
+// --- DetectMultipleContexts / FilterByContext tests (#120) ---
+
+func TestDetectMultipleContexts_single(t *testing.T) {
+	resources := []provider.Resource{
+		{ID: provider.ResourceID{Type: "opensearch_role", Name: "a"}, Body: buildAttrs("context", provider.StringVal("prod"))},
+		{ID: provider.ResourceID{Type: "opensearch_role", Name: "b"}, Body: buildAttrs("context", provider.StringVal("prod"))},
+	}
+	names, multiple := DetectMultipleContexts(resources)
+	if multiple {
+		t.Error("expected single context, got multiple")
+	}
+	if len(names) != 1 || names[0] != "prod" {
+		t.Errorf("expected [prod], got %v", names)
+	}
+}
+
+func TestDetectMultipleContexts_multiple(t *testing.T) {
+	resources := []provider.Resource{
+		{ID: provider.ResourceID{Type: "opensearch_role", Name: "a"}, Body: buildAttrs("context", provider.StringVal("prod"))},
+		{ID: provider.ResourceID{Type: "opensearch_role", Name: "b"}, Body: buildAttrs("context", provider.StringVal("staging"))},
+	}
+	names, multiple := DetectMultipleContexts(resources)
+	if !multiple {
+		t.Error("expected multiple contexts")
+	}
+	if len(names) != 2 {
+		t.Errorf("expected 2 names, got %d", len(names))
+	}
+}
+
+func TestFilterByContext_selects_matching(t *testing.T) {
+	resources := []provider.Resource{
+		{ID: provider.ResourceID{Type: "opensearch_role", Name: "a"}, Body: buildAttrs("context", provider.StringVal("prod"))},
+		{ID: provider.ResourceID{Type: "opensearch_role", Name: "b"}, Body: buildAttrs("context", provider.StringVal("staging"))},
+		{ID: provider.ResourceID{Type: "opensearch_role", Name: "c"}, Body: buildAttrs("context", provider.StringVal("prod"))},
+	}
+	contexts := []Context{
+		{Name: "prod", Provider: "opensearch"},
+		{Name: "staging", Provider: "opensearch"},
+	}
+
+	filtered, filteredCtx, err := FilterByContext(resources, contexts, "prod")
+	if err != nil {
+		t.Fatalf("FilterByContext failed: %v", err)
+	}
+	if len(filtered) != 2 {
+		t.Errorf("expected 2 filtered resources, got %d", len(filtered))
+	}
+	if len(filteredCtx) != 1 || filteredCtx[0].Name != "prod" {
+		t.Errorf("expected 1 filtered context (prod), got %v", filteredCtx)
+	}
+}
+
+func TestFilterByContext_no_match(t *testing.T) {
+	resources := []provider.Resource{
+		{ID: provider.ResourceID{Type: "opensearch_role", Name: "a"}, Body: buildAttrs("context", provider.StringVal("prod"))},
+	}
+
+	_, _, err := FilterByContext(resources, nil, "nonexistent")
+	if err == nil {
+		t.Fatal("expected error for no matching resources")
+	}
+}
+
+func TestFilterByContext_filters_contexts_too(t *testing.T) {
+	resources := []provider.Resource{
+		{ID: provider.ResourceID{Type: "opensearch_role", Name: "a"}, Body: buildAttrs("context", provider.StringVal("staging"))},
+	}
+	contexts := []Context{
+		{Name: "prod", Provider: "opensearch"},
+		{Name: "staging", Provider: "opensearch"},
+	}
+
+	_, filteredCtx, err := FilterByContext(resources, contexts, "staging")
+	if err != nil {
+		t.Fatalf("FilterByContext failed: %v", err)
+	}
+	if len(filteredCtx) != 1 || filteredCtx[0].Name != "staging" {
+		t.Errorf("expected only staging context, got %v", filteredCtx)
+	}
+}
+
 // --- ResolveConfigSecrets tests (#117) ---
 
 // stubResolver implements SecretResolver for testing.
