@@ -32,7 +32,7 @@ func (e *Engine) plan(ctx context.Context, file *dcl.File, configs map[string]*p
 	}
 
 	// 2. Look up, instantiate, and configure providers.
-	providers, err := ConfigureProviders(ctx, resourceSet.Resources, configs)
+	providers, _, err := ConfigureProviders(ctx, resourceSet.Resources, configs)
 	if err != nil {
 		return nil, fmt.Errorf("configure providers: %w", err)
 	}
