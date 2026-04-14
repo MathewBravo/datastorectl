@@ -72,3 +72,9 @@ func contextFlag(cmd *cobra.Command) string {
 	ctx, _ := cmd.Flags().GetString("context")
 	return ctx
 }
+
+// errExit is returned by RunE functions to set a specific exit code
+// without Cobra printing its own error message.
+type errExit struct{ code int }
+
+func (e errExit) Error() string { return fmt.Sprintf("exit %d", e.code) }
