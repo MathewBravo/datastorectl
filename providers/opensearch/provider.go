@@ -12,10 +12,11 @@ func init() {
 	provider.Register("opensearch", func() provider.Provider {
 		return &Provider{
 			handlers: map[string]resourceHandler{
-				"opensearch_role":          &roleHandler{},
-				"opensearch_internal_user": &internalUserHandler{},
-				"opensearch_role_mapping":  &roleMappingHandler{},
-				"opensearch_ism_policy":    &ismPolicyHandler{},
+				"opensearch_role":              &roleHandler{},
+				"opensearch_internal_user":     &internalUserHandler{},
+				"opensearch_role_mapping":      &roleMappingHandler{},
+				"opensearch_ism_policy":        &ismPolicyHandler{},
+				"opensearch_cluster_settings":  &clusterSettingsHandler{},
 				"opensearch_component_template":        &componentTemplateHandler{},
 				"opensearch_composable_index_template": &composableIndexTemplateHandler{},
 				"opensearch_ingest_pipeline":           &ingestPipelineHandler{},
