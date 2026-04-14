@@ -18,6 +18,7 @@ var resourceAPIPaths = map[string]string{
 	"opensearch_ism_policy":                "/_plugins/_ism/policies/",
 	"opensearch_component_template":        "/_component_template/",
 	"opensearch_composable_index_template": "/_index_template/",
+	"opensearch_ingest_pipeline":           "/_ingest/pipeline/",
 }
 
 // restPath returns the full REST path for a resource type and name.

@@ -18,6 +18,7 @@ func init() {
 				"opensearch_ism_policy":    &ismPolicyHandler{},
 				"opensearch_component_template":        &componentTemplateHandler{},
 				"opensearch_composable_index_template": &composableIndexTemplateHandler{},
+				"opensearch_ingest_pipeline":           &ingestPipelineHandler{},
 			},
 		}
 	})
