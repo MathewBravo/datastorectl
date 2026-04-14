@@ -15,6 +15,7 @@ var resourceAPIPaths = map[string]string{
 	"opensearch_role":                      "/_plugins/_security/api/roles/",
 	"opensearch_role_mapping":              "/_plugins/_security/api/rolesmapping/",
 	"opensearch_internal_user":             "/_plugins/_security/api/internalusers/",
+	"opensearch_ism_policy":                "/_plugins/_ism/policies/",
 	"opensearch_component_template":        "/_component_template/",
 	"opensearch_composable_index_template": "/_index_template/",
 }

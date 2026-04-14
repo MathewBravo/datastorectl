@@ -15,6 +15,7 @@ func init() {
 				"opensearch_role":          &roleHandler{},
 				"opensearch_internal_user": &internalUserHandler{},
 				"opensearch_role_mapping":  &roleMappingHandler{},
+				"opensearch_ism_policy":    &ismPolicyHandler{},
 			},
 		}
 	})
