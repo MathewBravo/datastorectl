@@ -294,9 +294,9 @@ func TestEnginePlan(t *testing.T) {
 		}
 	})
 
-	t.Run("discover_extends_providers_map", func(t *testing.T) {
-		// Live has a type not present in desired. NormalizeResources should
-		// still succeed because discover extends the providers map.
+	t.Run("discover_scopes_to_declared_types", func(t *testing.T) {
+		// Live has a type not present in desired. Scoped discovery should
+		// exclude it — only declared resource types appear in the plan.
 		mock := &mockEngineProvider{
 			discoverFn: func(context.Context) ([]provider.Resource, dcl.Diagnostics) {
 				return []provider.Resource{
@@ -313,9 +313,9 @@ func TestEnginePlan(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		// The live-only resource should appear as a delete.
-		if len(plan.Deletes()) != 1 {
-			t.Errorf("expected 1 delete for live-only resource, got %d", len(plan.Deletes()))
+		// Live-only resource of undeclared type should NOT appear as a delete.
+		if len(plan.Deletes()) != 0 {
+			t.Errorf("expected 0 deletes (undeclared type filtered), got %d", len(plan.Deletes()))
 		}
 	})
 

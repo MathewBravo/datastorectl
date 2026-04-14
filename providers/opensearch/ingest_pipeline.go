@@ -24,6 +24,9 @@ func (h *ingestPipelineHandler) Discover(ctx context.Context, client *Client) ([
 	if err != nil {
 		return nil, fmt.Errorf("opensearch_ingest_pipeline: discover: %s", err)
 	}
+	if status == http.StatusNotFound {
+		return nil, nil // no pipelines exist
+	}
 	if status < 200 || status >= 300 {
 		return nil, fmt.Errorf("opensearch_ingest_pipeline: discover failed (%d): %s", status, body)
 	}

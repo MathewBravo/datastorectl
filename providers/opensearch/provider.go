@@ -76,6 +76,15 @@ func (p *Provider) Configure(ctx context.Context, config *provider.OrderedMap) d
 	}
 }
 
+// tlsSkipVerify returns true if tls_skip_verify is set to true in the config.
+func tlsSkipVerify(config *provider.OrderedMap) bool {
+	v, ok := config.Get("tls_skip_verify")
+	if !ok {
+		return false
+	}
+	return v.Kind == provider.KindBool && v.Bool
+}
+
 // configureBasicAuth validates username/password and creates a basic-auth client.
 func (p *Provider) configureBasicAuth(endpoint string, config *provider.OrderedMap) dcl.Diagnostics {
 	usernameVal, ok := config.Get("username")
@@ -96,7 +105,7 @@ func (p *Provider) configureBasicAuth(endpoint string, config *provider.OrderedM
 		}}
 	}
 
-	client, err := NewClient(endpoint, usernameVal.Str, passwordVal.Str)
+	client, err := NewClient(endpoint, usernameVal.Str, passwordVal.Str, tlsSkipVerify(config))
 	if err != nil {
 		return dcl.Diagnostics{{
 			Severity: dcl.SeverityError,
@@ -118,7 +127,7 @@ func (p *Provider) configureSigV4(ctx context.Context, endpoint string, config *
 		}}
 	}
 
-	client, err := NewSigV4Client(ctx, endpoint, regionVal.Str)
+	client, err := NewSigV4Client(ctx, endpoint, regionVal.Str, tlsSkipVerify(config))
 	if err != nil {
 		return dcl.Diagnostics{{
 			Severity: dcl.SeverityError,
