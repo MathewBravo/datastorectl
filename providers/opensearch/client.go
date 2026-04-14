@@ -3,6 +3,8 @@ package opensearch
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/opensearch-project/opensearch-go/v4"
@@ -28,6 +30,22 @@ func NewClient(endpoint, username, password string) (*Client, error) {
 		return nil, err
 	}
 	return &Client{api: api}, nil
+}
+
+// do executes an HTTP request through the underlying opensearch-go transport,
+// reads the full response body, and returns it along with the status code.
+func (c *Client) do(req *http.Request) ([]byte, int, error) {
+	resp, err := c.api.Client.Perform(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, err
+	}
+	return body, resp.StatusCode, nil
 }
 
 // NewSigV4Client creates an OpenSearch client that signs requests with AWS SigV4.
