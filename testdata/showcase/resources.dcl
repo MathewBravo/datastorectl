@@ -12,10 +12,12 @@ opensearch_role "log_reader" {
 
   cluster_permissions = ["cluster_monitor"]
 
-  index_permissions {
-    index_patterns  = ["logs-*"]
-    allowed_actions = ["read", "search"]
-  }
+  index_permissions = [
+    {
+      index_patterns  = ["logs-*"]
+      allowed_actions = ["read", "search"]
+    }
+  ]
 }
 
 opensearch_role_mapping "log_reader" {
