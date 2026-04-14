@@ -919,3 +919,66 @@ func TestValidateResources(t *testing.T) {
 		}
 	})
 }
+
+type mockOrderingProvider struct {
+	mockEngineProvider
+	orderings []provider.TypeOrdering
+}
+
+func (m *mockOrderingProvider) TypeOrderings() []provider.TypeOrdering {
+	return m.orderings
+}
+
+func TestEnginePlan_TypeOrderings(t *testing.T) {
+	t.Run("provider_orderings_create_graph_edges", func(t *testing.T) {
+		mock := &mockOrderingProvider{
+			orderings: []provider.TypeOrdering{
+				{Before: "engord1_role", After: "engord1_mapping"},
+			},
+		}
+		provider.Register("engord1", func() provider.Provider { return mock })
+
+		file := makeFile(
+			provider.ResourceID{Type: "engord1_role", Name: "admin"},
+			provider.ResourceID{Type: "engord1_mapping", Name: "m1"},
+		)
+
+		e := &Engine{SecretResolver: stubSecretResolver{}}
+		_, graph, err := e.Plan(context.Background(), file, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		deps := graph.DependsOn(rid("engord1_mapping", "m1"))
+		found := false
+		for _, d := range deps {
+			if d == rid("engord1_role", "admin") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected graph edge engord1_mapping.m1 → engord1_role.admin, got deps: %v", deps)
+		}
+	})
+
+	t.Run("no_orderings_no_extra_edges", func(t *testing.T) {
+		mock := &mockEngineProvider{}
+		provider.Register("engord2", func() provider.Provider { return mock })
+
+		file := makeFile(
+			provider.ResourceID{Type: "engord2_role", Name: "admin"},
+			provider.ResourceID{Type: "engord2_mapping", Name: "m1"},
+		)
+
+		e := &Engine{SecretResolver: stubSecretResolver{}}
+		_, graph, err := e.Plan(context.Background(), file, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		deps := graph.DependsOn(rid("engord2_mapping", "m1"))
+		if len(deps) != 0 {
+			t.Errorf("expected no edges between unrelated types, got deps: %v", deps)
+		}
+	})
+}

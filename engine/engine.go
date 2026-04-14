@@ -32,7 +32,7 @@ func (e *Engine) plan(ctx context.Context, file *dcl.File, configs map[string]*p
 	}
 
 	// 2. Look up, instantiate, and configure providers.
-	providers, _, err := ConfigureProviders(ctx, resourceSet.Resources, configs)
+	providers, orderings, err := ConfigureProviders(ctx, resourceSet.Resources, configs)
 	if err != nil {
 		return nil, fmt.Errorf("configure providers: %w", err)
 	}
@@ -44,7 +44,7 @@ func (e *Engine) plan(ctx context.Context, file *dcl.File, configs map[string]*p
 	}
 
 	// 4. Build the dependency graph BEFORE resolution (needs KindReference values).
-	graph, err := BuildDependencyGraph(resourceSet.Resources)
+	graph, err := BuildDependencyGraphWithOrdering(resourceSet.Resources, orderings)
 	if err != nil {
 		return nil, fmt.Errorf("build dependency graph: %w", err)
 	}
