@@ -17,6 +17,21 @@ func configMap(kvs ...string) *provider.OrderedMap {
 	return m
 }
 
+// configMapWithBool builds an *OrderedMap from key-value pairs of mixed types (string or bool).
+func configMapWithBool(kvs ...any) *provider.OrderedMap {
+	m := provider.NewOrderedMap()
+	for i := 0; i < len(kvs); i += 2 {
+		key := kvs[i].(string)
+		switch v := kvs[i+1].(type) {
+		case string:
+			m.Set(key, provider.StringVal(v))
+		case bool:
+			m.Set(key, provider.BoolVal(v))
+		}
+	}
+	return m
+}
+
 // ─── Configure validation ───────────────────────────────────────────
 
 func TestConfigure(t *testing.T) {
@@ -82,6 +97,11 @@ func TestConfigure(t *testing.T) {
 		{
 			name:    "basic_auth_success",
 			config:  configMap("endpoint", "https://localhost:9200", "auth", "basic", "username", "admin", "password", "secret"),
+			wantErr: false,
+		},
+		{
+			name:    "basic_auth_with_tls_skip_verify",
+			config:  configMapWithBool("endpoint", "https://localhost:9200", "auth", "basic", "username", "admin", "password", "secret", "tls_skip_verify", true),
 			wantErr: false,
 		},
 	}
