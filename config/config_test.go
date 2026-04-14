@@ -1,6 +1,8 @@
 package config
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -403,6 +405,107 @@ func TestDefaultConfigPath(t *testing.T) {
 	path := DefaultConfigPath()
 	if !strings.HasSuffix(path, filepath.Join(".datastorectl", "config.dcl")) {
 		t.Errorf("unexpected path: %s", path)
+	}
+}
+
+// --- ResolveConfigSecrets tests (#117) ---
+
+// stubResolver implements SecretResolver for testing.
+type stubResolver struct{}
+
+func (stubResolver) Resolve(_ context.Context, backend, path string) (string, error) {
+	if backend != "env" {
+		return "", fmt.Errorf("unsupported secret backend %q", backend)
+	}
+	v, ok := os.LookupEnv(path)
+	if !ok {
+		return "", fmt.Errorf("environment variable %q is not set", path)
+	}
+	return v, nil
+}
+
+func TestResolveConfigSecrets_env_resolved(t *testing.T) {
+	t.Setenv("TEST_SECRET_VALUE", "my-password")
+
+	configs := map[string]*provider.OrderedMap{
+		"opensearch": buildAttrs(
+			"endpoint", provider.StringVal("https://prod:9200"),
+			"password", provider.FuncCallVal("secret", []provider.Value{
+				provider.StringVal("env"),
+				provider.StringVal("TEST_SECRET_VALUE"),
+			}),
+		),
+	}
+
+	err := ResolveConfigSecrets(context.Background(), configs, stubResolver{})
+	if err != nil {
+		t.Fatalf("ResolveConfigSecrets failed: %v", err)
+	}
+
+	pw, _ := configs["opensearch"].Get("password")
+	if pw.Kind != provider.KindString || pw.Str != "my-password" {
+		t.Errorf("expected resolved string \"my-password\", got %s %q", pw.Kind, pw.Str)
+	}
+}
+
+func TestResolveConfigSecrets_unsupported_backend(t *testing.T) {
+	configs := map[string]*provider.OrderedMap{
+		"opensearch": buildAttrs(
+			"password", provider.FuncCallVal("secret", []provider.Value{
+				provider.StringVal("vault"),
+				provider.StringVal("path/to/secret"),
+			}),
+		),
+	}
+
+	err := ResolveConfigSecrets(context.Background(), configs, stubResolver{})
+	if err == nil {
+		t.Fatal("expected error for unsupported backend")
+	}
+}
+
+func TestResolveConfigSecrets_missing_env_var(t *testing.T) {
+	configs := map[string]*provider.OrderedMap{
+		"opensearch": buildAttrs(
+			"password", provider.FuncCallVal("secret", []provider.Value{
+				provider.StringVal("env"),
+				provider.StringVal("DEFINITELY_NOT_SET_12345"),
+			}),
+		),
+	}
+
+	err := ResolveConfigSecrets(context.Background(), configs, stubResolver{})
+	if err == nil {
+		t.Fatal("expected error for missing env var")
+	}
+}
+
+func TestResolveConfigSecrets_non_secret_function(t *testing.T) {
+	configs := map[string]*provider.OrderedMap{
+		"opensearch": buildAttrs(
+			"value", provider.FuncCallVal("other_func", []provider.Value{
+				provider.StringVal("arg"),
+			}),
+		),
+	}
+
+	err := ResolveConfigSecrets(context.Background(), configs, stubResolver{})
+	if err == nil {
+		t.Fatal("expected error for unsupported function")
+	}
+}
+
+func TestResolveConfigSecrets_no_secrets(t *testing.T) {
+	configs := map[string]*provider.OrderedMap{
+		"opensearch": buildAttrs(
+			"endpoint", provider.StringVal("https://prod:9200"),
+			"auth", provider.StringVal("basic"),
+		),
+	}
+
+	err := ResolveConfigSecrets(context.Background(), configs, stubResolver{})
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
 	}
 }
 

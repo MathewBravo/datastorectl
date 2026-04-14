@@ -5,6 +5,7 @@
 package config
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +14,12 @@ import (
 	"github.com/MathewBravo/datastorectl/dcl"
 	"github.com/MathewBravo/datastorectl/provider"
 )
+
+// SecretResolver resolves a secret reference to its plaintext value.
+// This mirrors engine.SecretResolver — defined locally to avoid an import cycle.
+type SecretResolver interface {
+	Resolve(ctx context.Context, backend, path string) (string, error)
+}
 
 // Context is a validated, structured representation of a DCL context block.
 type Context struct {
@@ -174,6 +181,72 @@ func DefaultConfigPath() string {
 		return filepath.Join("~", ".datastorectl", "config.dcl")
 	}
 	return filepath.Join(home, ".datastorectl", "config.dcl")
+}
+
+// ResolveConfigSecrets walks each config's OrderedMap and resolves secret()
+// function calls via the given resolver. Configs are modified in place.
+func ResolveConfigSecrets(ctx context.Context, configs map[string]*provider.OrderedMap, resolver SecretResolver) error {
+	for providerName, cfg := range configs {
+		for _, key := range cfg.Keys() {
+			v, _ := cfg.Get(key)
+			rv, err := resolveSecretValue(ctx, v, resolver)
+			if err != nil {
+				return fmt.Errorf("provider %q config attribute %q: %s", providerName, key, err)
+			}
+			cfg.Set(key, rv)
+		}
+	}
+	return nil
+}
+
+// resolveSecretValue recursively walks a Value tree, resolving any secret() calls.
+func resolveSecretValue(ctx context.Context, v provider.Value, resolver SecretResolver) (provider.Value, error) {
+	switch v.Kind {
+	case provider.KindFunctionCall:
+		if v.FuncName != "secret" {
+			return provider.Value{}, fmt.Errorf("unsupported function %q — only secret() is supported", v.FuncName)
+		}
+		if len(v.FuncArgs) != 2 {
+			return provider.Value{}, fmt.Errorf("secret() requires exactly 2 arguments, got %d", len(v.FuncArgs))
+		}
+		if v.FuncArgs[0].Kind != provider.KindString {
+			return provider.Value{}, fmt.Errorf("secret() argument 0 must be a string, got %s", v.FuncArgs[0].Kind)
+		}
+		if v.FuncArgs[1].Kind != provider.KindString {
+			return provider.Value{}, fmt.Errorf("secret() argument 1 must be a string, got %s", v.FuncArgs[1].Kind)
+		}
+		resolved, err := resolver.Resolve(ctx, v.FuncArgs[0].Str, v.FuncArgs[1].Str)
+		if err != nil {
+			return provider.Value{}, fmt.Errorf("secret(%q, %q): %s", v.FuncArgs[0].Str, v.FuncArgs[1].Str, err)
+		}
+		return provider.StringVal(resolved), nil
+
+	case provider.KindList:
+		elems := make([]provider.Value, len(v.List))
+		for i, elem := range v.List {
+			rv, err := resolveSecretValue(ctx, elem, resolver)
+			if err != nil {
+				return provider.Value{}, fmt.Errorf("list element %d: %s", i, err)
+			}
+			elems[i] = rv
+		}
+		return provider.ListVal(elems), nil
+
+	case provider.KindMap:
+		m := provider.NewOrderedMap()
+		for _, key := range v.Map.Keys() {
+			val, _ := v.Map.Get(key)
+			rv, err := resolveSecretValue(ctx, val, resolver)
+			if err != nil {
+				return provider.Value{}, fmt.Errorf("key %q: %s", key, err)
+			}
+			m.Set(key, rv)
+		}
+		return provider.MapVal(m), nil
+
+	default:
+		return v, nil
+	}
 }
 
 // --- private helpers ---
