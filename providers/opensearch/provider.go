@@ -19,6 +19,7 @@ func init() {
 				"opensearch_component_template":        &componentTemplateHandler{},
 				"opensearch_composable_index_template": &composableIndexTemplateHandler{},
 				"opensearch_ingest_pipeline":           &ingestPipelineHandler{},
+				"opensearch_snapshot_repository":       &snapshotRepositoryHandler{},
 			},
 		}
 	})
