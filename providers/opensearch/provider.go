@@ -12,7 +12,7 @@ func init() {
 	provider.Register("opensearch", func() provider.Provider {
 		return &Provider{
 			handlers: map[string]resourceHandler{
-				// Resource handlers will be registered here as they're implemented.
+				"opensearch_role": &roleHandler{},
 			},
 		}
 	})
