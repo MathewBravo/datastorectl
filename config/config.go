@@ -5,7 +5,10 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/MathewBravo/datastorectl/dcl"
 	"github.com/MathewBravo/datastorectl/provider"
@@ -67,6 +70,113 @@ func ParseContexts(blocks []dcl.Block) ([]Context, error) {
 
 	return contexts, nil
 }
+
+// BuildConfigs converts parsed contexts into the map[string]*provider.OrderedMap
+// format that engine.ConfigureProviders expects. The map key is the provider name
+// (e.g., "opensearch"). For v0.1.0, only one context per provider is supported.
+func BuildConfigs(contexts []Context) (map[string]*provider.OrderedMap, error) {
+	configs := make(map[string]*provider.OrderedMap, len(contexts))
+	for _, ctx := range contexts {
+		if _, dup := configs[ctx.Provider]; dup {
+			return nil, fmt.Errorf("multiple contexts configure provider %q — v0.1.0 supports one context per provider", ctx.Provider)
+		}
+		configs[ctx.Provider] = ctx.Attrs
+	}
+	return configs, nil
+}
+
+// ResolveResourceContexts strips the "context" attribute from each resource body
+// and validates that every resource references a known context whose provider
+// matches the resource type prefix.
+func ResolveResourceContexts(resources []provider.Resource, contexts []Context) ([]provider.Resource, error) {
+	ctxByName := make(map[string]Context, len(contexts))
+	for _, ctx := range contexts {
+		ctxByName[ctx.Name] = ctx
+	}
+
+	resolved := make([]provider.Resource, len(resources))
+	for i, r := range resources {
+		ctxVal, ok := r.Body.Get("context")
+		if !ok {
+			return nil, fmt.Errorf("%s: \"context\" attribute is required — every resource must declare which context it belongs to", r.ID)
+		}
+		if ctxVal.Kind != provider.KindString {
+			return nil, fmt.Errorf("%s: \"context\" must be a name, got %s", r.ID, ctxVal.Kind)
+		}
+
+		ctxName := ctxVal.Str
+		ctx, ok := ctxByName[ctxName]
+		if !ok {
+			return nil, fmt.Errorf("%s: references unknown context %q", r.ID, ctxName)
+		}
+
+		prefix, ok := provider.ProviderForResourceType(r.ID.Type)
+		if !ok {
+			return nil, fmt.Errorf("%s: cannot determine provider from resource type", r.ID)
+		}
+		if prefix != ctx.Provider {
+			return nil, fmt.Errorf("%s: resource type prefix %q does not match context %q provider %q", r.ID, prefix, ctxName, ctx.Provider)
+		}
+
+		body := r.Body.Clone()
+		body.Delete("context")
+		resolved[i] = provider.Resource{ID: r.ID, Body: body, SourceRange: r.SourceRange}
+	}
+
+	return resolved, nil
+}
+
+// LoadConfigFile loads contexts from a DCL config file (e.g., ~/.datastorectl/config.dcl).
+// Returns an empty slice and no error if the file does not exist (config file is optional).
+// Returns an error if the file contains resource blocks (config files are for contexts only).
+func LoadConfigFile(path string) ([]Context, error) {
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+
+	file, diags := dcl.LoadFile(path)
+	if diags.HasErrors() {
+		return nil, fmt.Errorf("loading config file %s: %s", path, diags.Error())
+	}
+
+	contexts, resources := SplitFile(file)
+	if len(resources) > 0 {
+		return nil, fmt.Errorf("config file %s contains resource blocks — config files should only contain context blocks", path)
+	}
+
+	return ParseContexts(contexts)
+}
+
+// MergeContexts combines contexts from resource files (inline) with contexts
+// from a config file. Duplicate names across sources produce an error.
+func MergeContexts(inline, fromFile []Context) ([]Context, error) {
+	seen := make(map[string]struct{}, len(inline))
+	for _, ctx := range inline {
+		seen[ctx.Name] = struct{}{}
+	}
+	for _, ctx := range fromFile {
+		if _, dup := seen[ctx.Name]; dup {
+			return nil, fmt.Errorf("context %q defined in both resource files and config file — each context name must be unique", ctx.Name)
+		}
+		seen[ctx.Name] = struct{}{}
+	}
+
+	merged := make([]Context, 0, len(inline)+len(fromFile))
+	merged = append(merged, inline...)
+	merged = append(merged, fromFile...)
+	return merged, nil
+}
+
+// DefaultConfigPath returns the default config file path: ~/.datastorectl/config.dcl.
+func DefaultConfigPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join("~", ".datastorectl", "config.dcl")
+	}
+	return filepath.Join(home, ".datastorectl", "config.dcl")
+}
+
+// --- private helpers ---
 
 // extractContextAttrs pulls the "provider" attribute out of a context block
 // and converts the remaining attributes into a provider.OrderedMap.
