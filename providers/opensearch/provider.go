@@ -14,6 +14,7 @@ func init() {
 			handlers: map[string]resourceHandler{
 				"opensearch_role":          &roleHandler{},
 				"opensearch_internal_user": &internalUserHandler{},
+				"opensearch_role_mapping":  &roleMappingHandler{},
 			},
 		}
 	})
