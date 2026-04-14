@@ -1,10 +1,23 @@
 services:
+  opensearch-init:
+    image: opensearchproject/opensearch:2.19.0
+    user: "0"
+    volumes:
+      - opensearch-snapshots:/mnt/snapshots
+    command: ["chown", "-R", "1000:1000", "/mnt/snapshots"]
+
   opensearch:
     image: opensearchproject/opensearch:2.19.0
+    depends_on:
+      opensearch-init:
+        condition: service_completed_successfully
     environment:
       - discovery.type=single-node
       - OPENSEARCH_INITIAL_ADMIN_PASSWORD=myStrongPassword123!
       - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+      - path.repo=/usr/share/opensearch/snapshots
+    volumes:
+      - opensearch-snapshots:/usr/share/opensearch/snapshots
     ports:
       - "9200:9200"
       - "9600:9600"
@@ -14,3 +27,6 @@ services:
       timeout: 5s
       retries: 12
       start_period: 30s
+
+volumes:
+  opensearch-snapshots:
