@@ -13,6 +13,17 @@ import (
 // roleHandler implements resourceHandler for opensearch_role resources.
 type roleHandler struct{}
 
+// Schema declares that index_permissions and tenant_permissions are always
+// lists, even when only one block appears in the DCL source.
+func (h *roleHandler) Schema() provider.Schema {
+	return provider.Schema{
+		Fields: map[string]provider.FieldHint{
+			"index_permissions":  provider.FieldBlockList,
+			"tenant_permissions": provider.FieldBlockList,
+		},
+	}
+}
+
 // Discover fetches all non-reserved, non-hidden, non-static roles from OpenSearch.
 func (h *roleHandler) Discover(ctx context.Context, client *Client) ([]provider.Resource, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "/_plugins/_security/api/roles/", nil)

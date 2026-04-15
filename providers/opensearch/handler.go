@@ -14,3 +14,10 @@ type resourceHandler interface {
 	Validate(ctx context.Context, r provider.Resource) error
 	Apply(ctx context.Context, client *Client, op provider.Operation, r provider.Resource) error
 }
+
+// schemaProvider is an optional interface a handler may implement to declare
+// the expected structure of its nested blocks. The provider collects these
+// during Schemas() and passes them to the DCL converter.
+type schemaProvider interface {
+	Schema() provider.Schema
+}

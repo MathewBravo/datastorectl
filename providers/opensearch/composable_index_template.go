@@ -14,6 +14,15 @@ import (
 // composableIndexTemplateHandler implements resourceHandler for opensearch_composable_index_template resources.
 type composableIndexTemplateHandler struct{}
 
+// Schema declares that template is always a map block.
+func (h *composableIndexTemplateHandler) Schema() provider.Schema {
+	return provider.Schema{
+		Fields: map[string]provider.FieldHint{
+			"template": provider.FieldBlockMap,
+		},
+	}
+}
+
 // Discover fetches all non-system composable index templates from OpenSearch.
 func (h *composableIndexTemplateHandler) Discover(ctx context.Context, client *Client) ([]provider.Resource, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "/_index_template", nil)

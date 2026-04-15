@@ -14,6 +14,15 @@ import (
 // componentTemplateHandler implements resourceHandler for opensearch_component_template resources.
 type componentTemplateHandler struct{}
 
+// Schema declares that template is always a map block.
+func (h *componentTemplateHandler) Schema() provider.Schema {
+	return provider.Schema{
+		Fields: map[string]provider.FieldHint{
+			"template": provider.FieldBlockMap,
+		},
+	}
+}
+
 // Discover fetches all non-system component templates from OpenSearch.
 func (h *componentTemplateHandler) Discover(ctx context.Context, client *Client) ([]provider.Resource, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "/_component_template", nil)

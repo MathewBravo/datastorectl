@@ -29,6 +29,7 @@ func (stubProvider) Validate(context.Context, Resource) dcl.Diagnostics { return
 func (stubProvider) Apply(context.Context, Operation, Resource) dcl.Diagnostics {
 	return nil
 }
+func (stubProvider) Schemas() map[string]Schema { return nil }
 
 func TestRegisterAndLookup(t *testing.T) {
 	t.Cleanup(resetRegistry)

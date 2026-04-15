@@ -23,7 +23,7 @@ func TestConvertFile_Basic(t *testing.T) {
 				},
 			},
 		}
-		rs, err := ConvertFile(file)
+		rs, err := ConvertFile(file, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -49,7 +49,7 @@ func TestConvertFile_Basic(t *testing.T) {
 				{Type: "policy", Label: "p1"},
 			},
 		}
-		rs, err := ConvertFile(file)
+		rs, err := ConvertFile(file, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -70,7 +70,7 @@ func TestConvertFile_Basic(t *testing.T) {
 
 	t.Run("empty_blocks", func(t *testing.T) {
 		file := &dcl.File{Blocks: nil}
-		rs, err := ConvertFile(file)
+		rs, err := ConvertFile(file, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -90,7 +90,7 @@ func TestConvertFile_Basic(t *testing.T) {
 				{Type: "b_type", Label: "second"},
 			},
 		}
-		rs, err := ConvertFile(file)
+		rs, err := ConvertFile(file, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -117,7 +117,7 @@ func TestConvertFile_Duplicates(t *testing.T) {
 				{Type: "index", Label: "logs"},
 			},
 		}
-		_, err := ConvertFile(file)
+		_, err := ConvertFile(file, nil)
 		if err == nil {
 			t.Fatal("expected error for duplicate resource")
 		}
@@ -137,7 +137,7 @@ func TestConvertFile_Duplicates(t *testing.T) {
 				{Type: "index", Label: "b"},
 			},
 		}
-		rs, err := ConvertFile(file)
+		rs, err := ConvertFile(file, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -153,7 +153,7 @@ func TestConvertFile_Duplicates(t *testing.T) {
 				{Type: "template", Label: "logs"},
 			},
 		}
-		rs, err := ConvertFile(file)
+		rs, err := ConvertFile(file, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -172,7 +172,7 @@ func TestConvertFile_Duplicates(t *testing.T) {
 				{Type: "config", Label: "c1"},
 			},
 		}
-		_, err := ConvertFile(file)
+		_, err := ConvertFile(file, nil)
 		if err == nil {
 			t.Fatal("expected error for duplicate resource")
 		}
@@ -185,7 +185,7 @@ func TestConvertFile_Duplicates(t *testing.T) {
 
 func TestConvertFile_Errors(t *testing.T) {
 	t.Run("nil_file", func(t *testing.T) {
-		_, err := ConvertFile(nil)
+		_, err := ConvertFile(nil, nil)
 		if err == nil {
 			t.Fatal("expected error for nil file")
 		}
@@ -200,7 +200,7 @@ func TestConvertFile_Errors(t *testing.T) {
 				{Severity: dcl.SeverityError, Message: "unexpected token"},
 			},
 		}
-		_, err := ConvertFile(file)
+		_, err := ConvertFile(file, nil)
 		if err == nil {
 			t.Fatal("expected error for file with parse errors")
 		}
@@ -218,7 +218,7 @@ func TestConvertFile_Errors(t *testing.T) {
 				{Type: "index", Label: "logs"},
 			},
 		}
-		rs, err := ConvertFile(file)
+		rs, err := ConvertFile(file, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -239,7 +239,7 @@ func TestConvertFile_Errors(t *testing.T) {
 				},
 			},
 		}
-		_, err := ConvertFile(file)
+		_, err := ConvertFile(file, nil)
 		if err == nil {
 			t.Fatal("expected error for block conversion failure")
 		}
@@ -271,7 +271,7 @@ func TestConvertFile_Fidelity(t *testing.T) {
 				},
 			},
 		}
-		rs, err := ConvertFile(file)
+		rs, err := ConvertFile(file, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -305,7 +305,7 @@ func TestConvertFile_Fidelity(t *testing.T) {
 				{Type: "index", Label: "b", Rng: rng1},
 			},
 		}
-		rs, err := ConvertFile(file)
+		rs, err := ConvertFile(file, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -724,7 +724,7 @@ func TestBlockToResource_Basic(t *testing.T) {
 			Rng: rng,
 		}
 
-		got, err := blockToResource(block)
+		got, err := blockToResource(block, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -751,7 +751,7 @@ func TestBlockToResource_Basic(t *testing.T) {
 	t.Run("empty_block", func(t *testing.T) {
 		block := dcl.Block{Type: "template", Label: "t1"}
 
-		got, err := blockToResource(block)
+		got, err := blockToResource(block, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -777,7 +777,7 @@ func TestBlockToResource_Basic(t *testing.T) {
 			},
 		}
 
-		got, err := blockToResource(block)
+		got, err := blockToResource(block, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -807,7 +807,7 @@ func TestBlockToResource_NestedBlocks(t *testing.T) {
 			},
 		}
 
-		got, err := blockToResource(block)
+		got, err := blockToResource(block, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -836,7 +836,7 @@ func TestBlockToResource_NestedBlocks(t *testing.T) {
 			},
 		}
 
-		got, err := blockToResource(block)
+		got, err := blockToResource(block, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -882,7 +882,7 @@ func TestBlockToResource_NestedBlocks(t *testing.T) {
 			},
 		}
 
-		got, err := blockToResource(block)
+		got, err := blockToResource(block, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -923,7 +923,7 @@ func TestBlockToResource_NestedBlocks(t *testing.T) {
 			},
 		}
 
-		got, err := blockToResource(block)
+		got, err := blockToResource(block, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -964,7 +964,7 @@ func TestBlockToResource_NestedBlocks(t *testing.T) {
 			},
 		}
 
-		got, err := blockToResource(block)
+		got, err := blockToResource(block, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1005,7 +1005,7 @@ func TestBlockToResource_DeepNesting(t *testing.T) {
 			},
 		}
 
-		got, err := blockToResource(block)
+		got, err := blockToResource(block, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1092,7 +1092,7 @@ func TestBlockToResource_DeepNesting(t *testing.T) {
 			},
 		}
 
-		got, err := blockToResource(block)
+		got, err := blockToResource(block, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1157,7 +1157,7 @@ func TestBlockToResource_Errors(t *testing.T) {
 				{Key: "bad", Value: nil},
 			},
 		}
-		_, err := blockToResource(block)
+		_, err := blockToResource(block, nil)
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -1183,7 +1183,7 @@ func TestBlockToResource_Errors(t *testing.T) {
 				},
 			},
 		}
-		_, err := blockToResource(block)
+		_, err := blockToResource(block, nil)
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -1217,7 +1217,7 @@ func TestBlockToResource_Errors(t *testing.T) {
 				},
 			},
 		}
-		_, err := blockToResource(block)
+		_, err := blockToResource(block, nil)
 		if err == nil {
 			t.Fatal("expected error")
 		}

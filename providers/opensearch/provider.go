@@ -199,6 +199,18 @@ func (p *Provider) Apply(ctx context.Context, op provider.Operation, r provider.
 	return nil
 }
 
+// Schemas collects schema declarations from all handlers that implement the
+// schemaProvider interface and returns them keyed by resource type.
+func (p *Provider) Schemas() map[string]provider.Schema {
+	schemas := make(map[string]provider.Schema)
+	for typ, h := range p.handlers {
+		if sp, ok := h.(schemaProvider); ok {
+			schemas[typ] = sp.Schema()
+		}
+	}
+	return schemas
+}
+
 // TypeOrderings declares the default resource type ordering for the opensearch provider.
 func (p *Provider) TypeOrderings() []provider.TypeOrdering {
 	return []provider.TypeOrdering{

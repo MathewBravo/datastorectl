@@ -15,26 +15,34 @@ type ResourceSet struct {
 
 // ConvertFile converts all blocks in a parsed DCL file into a ResourceSet.
 // It returns an error if the file contains parse errors or if any two
-// blocks produce the same ResourceID.
-func ConvertFile(file *dcl.File) (*ResourceSet, error) {
+// blocks produce the same ResourceID. The schemas map may be nil for
+// untyped conversion (count-based fallback).
+func ConvertFile(file *dcl.File, schemas map[string]provider.Schema) (*ResourceSet, error) {
 	if file == nil {
 		return nil, fmt.Errorf("cannot convert nil file")
 	}
 	if file.Diagnostics.HasErrors() {
 		return nil, fmt.Errorf("file has parse errors: %s", file.Diagnostics.Error())
 	}
-	return ConvertBlocks(file.Blocks)
+	return ConvertBlocks(file.Blocks, schemas)
 }
 
 // ConvertBlocks converts a slice of DCL blocks into a ResourceSet.
 // Unlike ConvertFile, it operates on pre-filtered blocks (e.g., after
 // context blocks have been separated out by config.SplitFile).
-func ConvertBlocks(blocks []dcl.Block) (*ResourceSet, error) {
+// The schemas map may be nil for untyped conversion (count-based fallback).
+func ConvertBlocks(blocks []dcl.Block, schemas map[string]provider.Schema) (*ResourceSet, error) {
 	resources := make([]provider.Resource, 0, len(blocks))
 	seen := map[provider.ResourceID]struct{}{}
 
 	for i, block := range blocks {
-		r, err := blockToResource(block)
+		var schema *provider.Schema
+		if schemas != nil {
+			if s, ok := schemas[block.Type]; ok {
+				schema = &s
+			}
+		}
+		r, err := blockToResource(block, schema)
 		if err != nil {
 			return nil, fmt.Errorf("block %d (%s %q): %w", i, block.Type, block.Label, err)
 		}
@@ -115,8 +123,9 @@ func exprToValue(expr dcl.Expression) (provider.Value, error) {
 
 // blockToResource converts a top-level DCL Block into a provider Resource.
 // Block.Type → ResourceID.Type, Block.Label → ResourceID.Name.
-func blockToResource(block dcl.Block) (provider.Resource, error) {
-	body, err := convertBody(block.Attributes, block.Blocks)
+// The schema is used to determine list vs map for nested blocks; it may be nil.
+func blockToResource(block dcl.Block, schema *provider.Schema) (provider.Resource, error) {
+	body, err := convertBody(block.Attributes, block.Blocks, schema)
 	if err != nil {
 		return provider.Resource{}, err
 	}
@@ -128,9 +137,11 @@ func blockToResource(block dcl.Block) (provider.Resource, error) {
 }
 
 // convertBody converts a block's attributes and nested blocks into an OrderedMap.
-// Attributes are converted via exprToValue. Nested blocks are grouped by type:
-// single-occurrence types become a MapVal, multi-occurrence become a ListVal.
-func convertBody(attrs []dcl.Attribute, blocks []dcl.Block) (*provider.OrderedMap, error) {
+// Attributes are converted via exprToValue. Nested blocks are grouped by type.
+// When a schema is provided, its FieldHints determine list vs map. When schema
+// is nil (e.g. inside nested blocks), count-based fallback applies: single
+// occurrence → MapVal, multiple → ListVal.
+func convertBody(attrs []dcl.Attribute, blocks []dcl.Block, schema *provider.Schema) (*provider.OrderedMap, error) {
 	m := provider.NewOrderedMap()
 
 	// Attributes first.
@@ -158,15 +169,14 @@ func convertBody(attrs []dcl.Attribute, blocks []dcl.Block) (*provider.OrderedMa
 		}
 	}
 
-	// Convert each group.
+	// Convert each group. Schema hints take precedence; count-based fallback
+	// is used when no schema is present.
 	for _, g := range groups {
-		if len(g.blocks) == 1 {
-			nested, err := convertNestedBlock(g.blocks[0])
-			if err != nil {
-				return nil, fmt.Errorf("block %q: %w", g.typ, err)
-			}
-			m.Set(g.typ, provider.MapVal(nested))
-		} else {
+		hint := fieldHintFor(schema, g.typ)
+
+		switch hint {
+		case provider.FieldBlockList:
+			// Always produce a list, even for a single block.
 			elems := make([]provider.Value, len(g.blocks))
 			for i, b := range g.blocks {
 				nested, err := convertNestedBlock(b)
@@ -176,16 +186,60 @@ func convertBody(attrs []dcl.Attribute, blocks []dcl.Block) (*provider.OrderedMa
 				elems[i] = provider.MapVal(nested)
 			}
 			m.Set(g.typ, provider.ListVal(elems))
+
+		case provider.FieldBlockMap:
+			// Always produce a map; error if more than one block.
+			if len(g.blocks) > 1 {
+				return nil, fmt.Errorf("block %q: schema declares map but %d blocks found", g.typ, len(g.blocks))
+			}
+			nested, err := convertNestedBlock(g.blocks[0])
+			if err != nil {
+				return nil, fmt.Errorf("block %q: %w", g.typ, err)
+			}
+			m.Set(g.typ, provider.MapVal(nested))
+
+		default:
+			// No schema hint — count-based fallback.
+			if schema != nil {
+				return nil, fmt.Errorf("block %q: not declared in schema for this resource type", g.typ)
+			}
+			if len(g.blocks) == 1 {
+				nested, err := convertNestedBlock(g.blocks[0])
+				if err != nil {
+					return nil, fmt.Errorf("block %q: %w", g.typ, err)
+				}
+				m.Set(g.typ, provider.MapVal(nested))
+			} else {
+				elems := make([]provider.Value, len(g.blocks))
+				for i, b := range g.blocks {
+					nested, err := convertNestedBlock(b)
+					if err != nil {
+						return nil, fmt.Errorf("block %q[%d]: %w", g.typ, i, err)
+					}
+					elems[i] = provider.MapVal(nested)
+				}
+				m.Set(g.typ, provider.ListVal(elems))
+			}
 		}
 	}
 
 	return m, nil
 }
 
+// fieldHintFor returns the FieldHint for a block type from the schema.
+// Returns 0 (no hint) if the schema is nil or doesn't contain the field.
+func fieldHintFor(schema *provider.Schema, blockType string) provider.FieldHint {
+	if schema == nil || schema.Fields == nil {
+		return 0
+	}
+	return schema.Fields[blockType]
+}
+
 // convertNestedBlock converts a single nested block's content into an OrderedMap.
 // If the block has a label, the result is wrapped: label becomes the key.
+// Nested blocks always use count-based fallback (nil schema).
 func convertNestedBlock(block dcl.Block) (*provider.OrderedMap, error) {
-	inner, err := convertBody(block.Attributes, block.Blocks)
+	inner, err := convertBody(block.Attributes, block.Blocks, nil)
 	if err != nil {
 		return nil, err
 	}

@@ -31,6 +31,7 @@ func (m *mockProvider) Apply(ctx context.Context, op provider.Operation, r provi
 	}
 	return nil
 }
+func (m *mockProvider) Schemas() map[string]provider.Schema { return nil }
 
 func errDiags(msg string) dcl.Diagnostics {
 	return dcl.Diagnostics{{Severity: dcl.SeverityError, Message: msg}}
