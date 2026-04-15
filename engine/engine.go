@@ -36,14 +36,17 @@ func (e *Engine) plan(ctx context.Context, file *dcl.File, configs map[string]*p
 	// 1. Split file into context and resource blocks.
 	contextBlocks, resourceBlocks := config.SplitFile(file)
 
-	// 2. Convert resource blocks (not context blocks) into a flat resource set.
-	resourceSet, err := ConvertBlocks(resourceBlocks)
+	// 2. Collect schemas from providers for the resource types in this file.
+	schemas := collectSchemas(resourceBlocks)
+
+	// 3. Convert resource blocks (not context blocks) into a flat resource set.
+	resourceSet, err := ConvertBlocks(resourceBlocks, schemas)
 	if err != nil {
 		return nil, fmt.Errorf("convert: %w", err)
 	}
 	desired := resourceSet.Resources
 
-	// 3. If file has context blocks, parse them and wire up configs.
+	// 4. If file has context blocks, parse them and wire up configs.
 	if len(contextBlocks) > 0 {
 		contexts, err := config.ParseContexts(contextBlocks)
 		if err != nil {
@@ -68,19 +71,19 @@ func (e *Engine) plan(ctx context.Context, file *dcl.File, configs map[string]*p
 		}
 	}
 
-	// 4. Look up, instantiate, and configure providers.
+	// 5. Look up, instantiate, and configure providers.
 	providers, orderings, err := ConfigureProviders(ctx, desired, configs)
 	if err != nil {
 		return nil, fmt.Errorf("configure providers: %w", err)
 	}
 
-	// 5. Discover live state from each unique provider.
+	// 6. Discover live state from each unique provider.
 	allLive, err := discover(ctx, providers)
 	if err != nil {
 		return nil, fmt.Errorf("discover: %w", err)
 	}
 
-	// 5b. Scope live resources to only types present in desired state.
+	// 6b. Scope live resources to only types present in desired state.
 	// This prevents the engine from planning deletes for resource types
 	// the user didn't declare (e.g., built-in OpenSearch users).
 	desiredTypes := make(map[string]struct{}, len(desired))
@@ -94,19 +97,19 @@ func (e *Engine) plan(ctx context.Context, file *dcl.File, configs map[string]*p
 		}
 	}
 
-	// 6. Build the dependency graph BEFORE resolution (needs KindReference values).
+	// 7. Build the dependency graph BEFORE resolution (needs KindReference values).
 	graph, err := BuildDependencyGraphWithOrdering(desired, orderings)
 	if err != nil {
 		return nil, fmt.Errorf("build dependency graph: %w", err)
 	}
 
-	// 7. Build an index of desired resources for reference resolution.
+	// 8. Build an index of desired resources for reference resolution.
 	index := make(map[provider.ResourceID]provider.Resource, len(desired))
 	for _, r := range desired {
 		index[r.ID] = r
 	}
 
-	// 8. Resolve cross-resource references in desired resources.
+	// 9. Resolve cross-resource references in desired resources.
 	for i, r := range desired {
 		resolved, err := ResolveReferences(r, index)
 		if err != nil {
@@ -115,7 +118,7 @@ func (e *Engine) plan(ctx context.Context, file *dcl.File, configs map[string]*p
 		desired[i] = resolved
 	}
 
-	// 9. Resolve secret function calls in desired resources.
+	// 10. Resolve secret function calls in desired resources.
 	for i, r := range desired {
 		resolved, err := ResolveSecrets(ctx, r, e.SecretResolver)
 		if err != nil {
@@ -124,22 +127,22 @@ func (e *Engine) plan(ctx context.Context, file *dcl.File, configs map[string]*p
 		desired[i] = resolved
 	}
 
-	// 10. Normalize desired resources.
+	// 11. Normalize desired resources.
 	normalizedDesired, err := NormalizeResources(ctx, desired, providers)
 	if err != nil {
 		return nil, fmt.Errorf("normalize desired: %w", err)
 	}
 
-	// 11. Normalize live resources.
+	// 12. Normalize live resources.
 	normalizedLive, err := NormalizeResources(ctx, live, providers)
 	if err != nil {
 		return nil, fmt.Errorf("normalize live: %w", err)
 	}
 
-	// 12. Build the plan by diffing desired against live.
+	// 13. Build the plan by diffing desired against live.
 	plan := BuildPlan(normalizedDesired, normalizedLive)
 
-	// 13. Add live-only (delete) resources to the graph so OrderPlan includes them.
+	// 14. Add live-only (delete) resources to the graph so OrderPlan includes them.
 	for _, c := range plan.Changes {
 		if c.Type == ChangeDelete && !graph.HasNode(c.ID) {
 			graph.AddNode(c.ID)
@@ -212,6 +215,38 @@ func validateResources(ctx context.Context, plan *Plan, providers map[string]pro
 		}
 	}
 	return nil
+}
+
+// collectSchemas extracts provider prefixes from the resource blocks, looks up
+// each registered provider, and collects their declared schemas. This runs
+// before conversion so the converter can use schema hints for list vs map.
+// If a provider is not registered or declares no schemas, it is silently
+// skipped — errors are caught later during ConfigureProviders.
+func collectSchemas(blocks []dcl.Block) map[string]provider.Schema {
+	// Deduplicate provider prefixes.
+	prefixes := make(map[string]struct{})
+	for _, b := range blocks {
+		if prefix, ok := provider.ProviderForResourceType(b.Type); ok {
+			prefixes[prefix] = struct{}{}
+		}
+	}
+
+	schemas := make(map[string]provider.Schema)
+	for prefix := range prefixes {
+		f, ok := provider.Lookup(prefix)
+		if !ok {
+			continue
+		}
+		p := f()
+		for typ, s := range p.Schemas() {
+			schemas[typ] = s
+		}
+	}
+
+	if len(schemas) == 0 {
+		return nil
+	}
+	return schemas
 }
 
 // discover calls Discover on each unique provider instance, deduplicating by

@@ -119,7 +119,7 @@ func runPlan(cmd *cobra.Command, args []string) error {
 // convertAndResolveForDetection does a lightweight convert of resource blocks
 // for multi-context detection. Errors are swallowed — detection is best-effort.
 func convertAndResolveForDetection(resourceBlocks []dcl.Block, contexts []config.Context) ([]provider.Resource, error) {
-	rs, err := engine.ConvertBlocks(resourceBlocks)
+	rs, err := engine.ConvertBlocks(resourceBlocks, nil)
 	if err != nil {
 		return nil, err
 	}

@@ -56,6 +56,8 @@ func (m *mockEngineProvider) Apply(ctx context.Context, op provider.Operation, r
 	return nil
 }
 
+func (m *mockEngineProvider) Schemas() map[string]provider.Schema { return nil }
+
 // stubSecretResolver satisfies SecretResolver and always returns the path as
 // the resolved value.
 type stubSecretResolver struct{}

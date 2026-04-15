@@ -38,6 +38,7 @@ type Provider interface {
 	Normalize(ctx context.Context, r Resource) (Resource, dcl.Diagnostics)
 	Validate(ctx context.Context, r Resource) dcl.Diagnostics
 	Apply(ctx context.Context, op Operation, r Resource) dcl.Diagnostics
+	Schemas() map[string]Schema
 }
 
 // TypeOrdering declares that resources of type Before should be

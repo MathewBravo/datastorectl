@@ -36,6 +36,7 @@ func (m *mockConfigProvider) Validate(context.Context, provider.Resource) dcl.Di
 func (m *mockConfigProvider) Apply(context.Context, provider.Operation, provider.Resource) dcl.Diagnostics {
 	return nil
 }
+func (m *mockConfigProvider) Schemas() map[string]provider.Schema { return nil }
 
 func TestConfigureProviders(t *testing.T) {
 	t.Run("all_succeed", func(t *testing.T) {
