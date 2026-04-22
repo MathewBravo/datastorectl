@@ -1230,3 +1230,196 @@ func TestBlockToResource_Errors(t *testing.T) {
 		}
 	})
 }
+
+// --- Schema-aware conversion tests ---
+
+func TestConvertBlocks_schema_single_block_as_list(t *testing.T) {
+	// Regression: before the schema system, a single nested block of a given
+	// type produced a MapVal. With FieldBlockList, it must produce a ListVal
+	// with one element regardless of count.
+	blocks := []dcl.Block{
+		{
+			Type:  "opensearch_role",
+			Label: "log_reader",
+			Blocks: []dcl.Block{
+				{
+					Type: "index_permissions",
+					Attributes: []dcl.Attribute{
+						{Key: "index_patterns", Value: &dcl.ListExpr{Elements: []dcl.Expression{
+							&dcl.LiteralString{Value: "logs-*"},
+						}}},
+					},
+				},
+			},
+		},
+	}
+	schemas := map[string]provider.Schema{
+		"opensearch_role": {
+			Fields: map[string]provider.FieldHint{
+				"index_permissions": provider.FieldBlockList,
+			},
+		},
+	}
+
+	rs, err := ConvertBlocks(blocks, schemas)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rs.Resources) != 1 {
+		t.Fatalf("len(Resources) = %d, want 1", len(rs.Resources))
+	}
+
+	got, ok := rs.Resources[0].Body.Get("index_permissions")
+	if !ok {
+		t.Fatal("expected index_permissions in body")
+	}
+	if got.Kind != provider.KindList {
+		t.Fatalf("index_permissions.Kind = %s, want KindList", got.Kind)
+	}
+	if len(got.List) != 1 {
+		t.Errorf("len(index_permissions) = %d, want 1", len(got.List))
+	}
+}
+
+func TestConvertBlocks_schema_list_multiple_blocks(t *testing.T) {
+	// FieldBlockList with 2+ blocks still produces a ListVal.
+	blocks := []dcl.Block{
+		{
+			Type:  "opensearch_role",
+			Label: "r",
+			Blocks: []dcl.Block{
+				{Type: "index_permissions", Attributes: []dcl.Attribute{
+					{Key: "index_patterns", Value: &dcl.ListExpr{Elements: []dcl.Expression{&dcl.LiteralString{Value: "a-*"}}}},
+				}},
+				{Type: "index_permissions", Attributes: []dcl.Attribute{
+					{Key: "index_patterns", Value: &dcl.ListExpr{Elements: []dcl.Expression{&dcl.LiteralString{Value: "b-*"}}}},
+				}},
+			},
+		},
+	}
+	schemas := map[string]provider.Schema{
+		"opensearch_role": {
+			Fields: map[string]provider.FieldHint{"index_permissions": provider.FieldBlockList},
+		},
+	}
+
+	rs, err := ConvertBlocks(blocks, schemas)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got, _ := rs.Resources[0].Body.Get("index_permissions")
+	if got.Kind != provider.KindList {
+		t.Fatalf("Kind = %s, want KindList", got.Kind)
+	}
+	if len(got.List) != 2 {
+		t.Errorf("len = %d, want 2", len(got.List))
+	}
+}
+
+func TestConvertBlocks_schema_map_single_block(t *testing.T) {
+	// FieldBlockMap with a single block produces a MapVal.
+	blocks := []dcl.Block{
+		{
+			Type:  "opensearch_component_template",
+			Label: "ct",
+			Blocks: []dcl.Block{
+				{Type: "template", Attributes: []dcl.Attribute{
+					{Key: "settings", Value: &dcl.LiteralString{Value: "x"}},
+				}},
+			},
+		},
+	}
+	schemas := map[string]provider.Schema{
+		"opensearch_component_template": {
+			Fields: map[string]provider.FieldHint{"template": provider.FieldBlockMap},
+		},
+	}
+
+	rs, err := ConvertBlocks(blocks, schemas)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got, _ := rs.Resources[0].Body.Get("template")
+	if got.Kind != provider.KindMap {
+		t.Fatalf("Kind = %s, want KindMap", got.Kind)
+	}
+}
+
+func TestConvertBlocks_schema_map_multiple_blocks_errors(t *testing.T) {
+	// FieldBlockMap with 2+ blocks is a user error.
+	blocks := []dcl.Block{
+		{
+			Type:  "opensearch_component_template",
+			Label: "ct",
+			Blocks: []dcl.Block{
+				{Type: "template"},
+				{Type: "template"},
+			},
+		},
+	}
+	schemas := map[string]provider.Schema{
+		"opensearch_component_template": {
+			Fields: map[string]provider.FieldHint{"template": provider.FieldBlockMap},
+		},
+	}
+
+	_, err := ConvertBlocks(blocks, schemas)
+	if err == nil {
+		t.Fatal("expected error for multiple blocks under FieldBlockMap")
+	}
+	if !strings.Contains(err.Error(), "schema declares map but 2 blocks found") {
+		t.Errorf("error = %q, want it to mention the mismatch", err.Error())
+	}
+}
+
+func TestConvertBlocks_schema_undeclared_block_errors(t *testing.T) {
+	// When a schema is present, unknown nested block types are an error.
+	blocks := []dcl.Block{
+		{
+			Type:  "opensearch_role",
+			Label: "r",
+			Blocks: []dcl.Block{
+				{Type: "mystery_block"},
+			},
+		},
+	}
+	schemas := map[string]provider.Schema{
+		"opensearch_role": {
+			Fields: map[string]provider.FieldHint{"index_permissions": provider.FieldBlockList},
+		},
+	}
+
+	_, err := ConvertBlocks(blocks, schemas)
+	if err == nil {
+		t.Fatal("expected error for undeclared nested block")
+	}
+	if !strings.Contains(err.Error(), "not declared in schema") {
+		t.Errorf("error = %q, want it to mention undeclared block", err.Error())
+	}
+}
+
+func TestConvertBlocks_schema_nil_uses_count_fallback(t *testing.T) {
+	// With nil schemas, the converter falls back to count-based heuristics:
+	// a single block becomes a MapVal. This preserves backward compatibility
+	// for callers that haven't adopted schemas.
+	blocks := []dcl.Block{
+		{
+			Type:  "anything",
+			Label: "x",
+			Blocks: []dcl.Block{
+				{Type: "nested", Attributes: []dcl.Attribute{
+					{Key: "k", Value: &dcl.LiteralString{Value: "v"}},
+				}},
+			},
+		},
+	}
+
+	rs, err := ConvertBlocks(blocks, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got, _ := rs.Resources[0].Body.Get("nested")
+	if got.Kind != provider.KindMap {
+		t.Errorf("Kind = %s, want KindMap (count-based fallback)", got.Kind)
+	}
+}
