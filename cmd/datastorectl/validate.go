@@ -52,7 +52,7 @@ func runValidate(cmd *cobra.Command, args []string) error {
 	}
 
 	// 4. Convert resource blocks.
-	resourceSet, err := engine.ConvertBlocks(resourceBlocks)
+	resourceSet, err := engine.ConvertBlocks(resourceBlocks, nil)
 	if err != nil {
 		return exitWithError(cmd, err, format, color)
 	}

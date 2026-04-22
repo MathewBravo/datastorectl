@@ -30,6 +30,7 @@ func (m *mockNormProvider) Validate(context.Context, provider.Resource) dcl.Diag
 func (m *mockNormProvider) Apply(context.Context, provider.Operation, provider.Resource) dcl.Diagnostics {
 	return nil
 }
+func (m *mockNormProvider) Schemas() map[string]provider.Schema { return nil }
 
 func TestNormalizeResources(t *testing.T) {
 	t.Run("all_succeed", func(t *testing.T) {
