@@ -226,6 +226,10 @@ func (p *parser) parseBlock() (Block, bool) {
 
 	var attrs []Attribute
 	var blocks []Block
+	// Track names seen within this block scope so we can reject duplicates.
+	// Attributes may never repeat; blocks may repeat (list syntax) but cannot
+	// collide with an attribute of the same name.
+	seen := map[string]string{} // name → "attribute" | "block"
 
 	for !p.tooManyErrors {
 		p.skipNewlines()
@@ -242,18 +246,42 @@ func (p *parser) parseBlock() (Block, bool) {
 
 		// Disambiguation inside block body.
 		if p.peek.Type == TokenEquals {
+			namePos := p.cur.Pos
+			name := p.cur.Literal
 			attr, ok := p.parseAttribute()
 			if ok {
-				attrs = append(attrs, attr)
+				if prev, dup := seen[name]; dup {
+					if prev == "attribute" {
+						p.addError(namePos, fmt.Sprintf(
+							"duplicate attribute %q: an attribute with this name was already defined in this block",
+							name))
+					} else {
+						p.addError(namePos, fmt.Sprintf(
+							"duplicate name %q: a nested block with this name was already defined in this block, so this attribute conflicts",
+							name))
+					}
+				} else {
+					seen[name] = "attribute"
+					attrs = append(attrs, attr)
+				}
 			}
 			continue
 		}
 
 		// ident + peek string/{ → nested block (recursive).
 		if p.peek.Type == TokenString || p.peek.Type == TokenLBrace {
+			namePos := p.cur.Pos
+			name := p.cur.Literal
 			block, ok := p.parseBlock()
 			if ok {
-				blocks = append(blocks, block)
+				if prev, dup := seen[name]; dup && prev == "attribute" {
+					p.addError(namePos, fmt.Sprintf(
+						"duplicate name %q: an attribute with this name was already defined in this block, so this nested block conflicts",
+						name))
+				} else {
+					seen[name] = "block"
+					blocks = append(blocks, block)
+				}
 			}
 			continue
 		}

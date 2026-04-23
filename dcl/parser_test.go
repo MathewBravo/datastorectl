@@ -1363,3 +1363,130 @@ func TestRecovery_ValidFileUnaffected(t *testing.T) {
 		t.Errorf("unexpected second nested: type=%q label=%q", logging.Type, logging.Label)
 	}
 }
+
+// --- Duplicate name detection (issue #145) ---
+
+func TestParseDuplicateAttribute(t *testing.T) {
+	src := `opensearch_role "r" {
+  cluster_permissions = ["read"]
+  cluster_permissions = ["write"]
+}`
+	_, diags := Parse("test.dcl", []byte(src))
+	if !diags.HasErrors() {
+		t.Fatal("expected error for duplicate attribute, got none")
+	}
+	found := false
+	for _, d := range diags {
+		if containsSubstring(d.Message, "duplicate") && containsSubstring(d.Message, "cluster_permissions") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected diagnostic mentioning duplicate and cluster_permissions, got: %s", diags.Error())
+	}
+}
+
+func TestParseDuplicateAttributeAndBlock(t *testing.T) {
+	src := `opensearch_role "r" {
+  index_permissions = [{ index_patterns = ["a"] }]
+  index_permissions {
+    index_patterns = ["b"]
+  }
+}`
+	_, diags := Parse("test.dcl", []byte(src))
+	if !diags.HasErrors() {
+		t.Fatal("expected error for attribute/block name collision, got none")
+	}
+	found := false
+	for _, d := range diags {
+		if containsSubstring(d.Message, "index_permissions") &&
+			(containsSubstring(d.Message, "duplicate") || containsSubstring(d.Message, "already")) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected diagnostic mentioning index_permissions collision, got: %s", diags.Error())
+	}
+}
+
+func TestParseDuplicateBlockThenAttribute(t *testing.T) {
+	src := `opensearch_role "r" {
+  index_permissions {
+    index_patterns = ["a"]
+  }
+  index_permissions = [{ index_patterns = ["b"] }]
+}`
+	_, diags := Parse("test.dcl", []byte(src))
+	if !diags.HasErrors() {
+		t.Fatal("expected error for block/attribute name collision, got none")
+	}
+	found := false
+	for _, d := range diags {
+		if containsSubstring(d.Message, "index_permissions") &&
+			(containsSubstring(d.Message, "duplicate") || containsSubstring(d.Message, "already")) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected diagnostic mentioning index_permissions collision, got: %s", diags.Error())
+	}
+}
+
+func TestParseRepeatedBlocksAllowed(t *testing.T) {
+	src := `opensearch_role "r" {
+  index_permissions {
+    index_patterns = ["a"]
+  }
+  index_permissions {
+    index_patterns = ["b"]
+  }
+}`
+	f := parseString(t, src)
+	if len(f.Blocks) != 1 {
+		t.Fatalf("expected 1 top-level block, got %d", len(f.Blocks))
+	}
+	role := f.Blocks[0]
+	if len(role.Blocks) != 2 {
+		t.Errorf("expected 2 nested index_permissions blocks, got %d", len(role.Blocks))
+	}
+}
+
+func TestParseDuplicateDetectionScopedToBlock(t *testing.T) {
+	// Same attribute name in sibling blocks is fine.
+	src := `opensearch_role "a" {
+  name = "one"
+}
+opensearch_role "b" {
+  name = "two"
+}`
+	f := parseString(t, src)
+	if len(f.Blocks) != 2 {
+		t.Fatalf("expected 2 blocks, got %d", len(f.Blocks))
+	}
+}
+
+func TestParseDuplicateInNestedBlock(t *testing.T) {
+	src := `opensearch_role "r" {
+  index_permissions {
+    index_patterns = ["a"]
+    index_patterns = ["b"]
+  }
+}`
+	_, diags := Parse("test.dcl", []byte(src))
+	if !diags.HasErrors() {
+		t.Fatal("expected error for duplicate in nested block, got none")
+	}
+	found := false
+	for _, d := range diags {
+		if containsSubstring(d.Message, "duplicate") && containsSubstring(d.Message, "index_patterns") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected diagnostic mentioning duplicate index_patterns, got: %s", diags.Error())
+	}
+}
