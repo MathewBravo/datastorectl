@@ -164,7 +164,45 @@ func (e *Engine) plan(ctx context.Context, file *dcl.File, configs map[string]*p
 		}
 	}
 
+	// 16. Collect DeleteGuards from any provider that implements DeleteGuarder.
+	plan.Guards = collectDeleteGuards(ctx, plan, providers)
+
 	return &planResult{plan: plan, graph: graph, providers: providers}, nil
+}
+
+// collectDeleteGuards groups deletes by provider and asks each provider
+// that implements DeleteGuarder to annotate them. Guards from all
+// providers are concatenated. Guard diagnostic errors are ignored —
+// a provider failing to produce guards should not block planning,
+// but means we lose the apply-time safety check for that provider.
+func collectDeleteGuards(ctx context.Context, plan *Plan, providers map[string]provider.Provider) []Guard {
+	byProvider := make(map[provider.Provider][]provider.Resource)
+	for _, c := range plan.Changes {
+		if c.Type != ChangeDelete || c.Live == nil {
+			continue
+		}
+		p, ok := providers[c.ID.Type]
+		if !ok {
+			continue
+		}
+		byProvider[p] = append(byProvider[p], *c.Live)
+	}
+
+	var guards []Guard
+	for p, deletes := range byProvider {
+		g, ok := p.(provider.DeleteGuarder)
+		if !ok {
+			continue
+		}
+		providerGuards, diags := g.GuardDeletes(ctx, deletes)
+		if diags.HasErrors() {
+			continue
+		}
+		for _, pg := range providerGuards {
+			guards = append(guards, Guard{Resource: pg.Resource, Reason: pg.Reason})
+		}
+	}
+	return guards
 }
 
 // Plan runs the full planning pipeline and returns the plan and dependency

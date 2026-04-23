@@ -44,10 +44,20 @@ type ResourceChange struct {
 // Changes are the actions that will execute (creates, updates, and — when
 // pruning is enabled — deletes). Unmanaged carries delete changes that were
 // discovered but suppressed because pruning is off; they are informational
-// only and never executed.
+// only and never executed. Guards carries provider-supplied annotations
+// on deletes that warrant a warning at plan time and an apply-time stop.
 type Plan struct {
 	Changes   []ResourceChange
 	Unmanaged []ResourceChange
+	Guards    []Guard
+}
+
+// Guard flags a specific planned delete as high-risk. The engine
+// surfaces guards to plan output and blocks apply unless the user
+// explicitly opts in via --allow-self-lockout (or equivalent).
+type Guard struct {
+	Resource provider.ResourceID
+	Reason   string
 }
 
 // PlanOptions tunes the planning pipeline. Zero value means additive-only:
