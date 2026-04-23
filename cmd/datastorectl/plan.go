@@ -27,6 +27,7 @@ Exit codes: 0 = no changes, 1 = error, 2 = drift detected (changes pending).`,
 }
 
 func init() {
+	planCmd.Flags().Bool("prune", false, "include delete changes in the plan (default: additive-only)")
 	rootCmd.AddCommand(planCmd)
 }
 
@@ -85,8 +86,9 @@ func runPlan(cmd *cobra.Command, args []string) error {
 	}
 
 	// 4. Run the engine plan.
+	prune, _ := cmd.Flags().GetBool("prune")
 	eng := createEngine()
-	plan, _, err := eng.Plan(ctx, file, nil, engine.PlanOptions{})
+	plan, _, err := eng.Plan(ctx, file, nil, engine.PlanOptions{Prune: prune})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return errExit{code: 1}
