@@ -115,6 +115,113 @@ func TestISMPolicyNormalize_strips_metadata(t *testing.T) {
 	}
 }
 
+func TestISMPolicyNormalize_strips_null_ism_template(t *testing.T) {
+	h := &ismPolicyHandler{}
+	r := provider.Resource{
+		ID: provider.ResourceID{Type: "opensearch_ism_policy", Name: "test"},
+		Body: buildMap(
+			"default_state", provider.StringVal("hot"),
+			"ism_template", provider.NullVal(),
+			"states", provider.ListVal([]provider.Value{
+				provider.MapVal(buildMap("name", provider.StringVal("hot"))),
+			}),
+		),
+	}
+
+	result, err := h.Normalize(context.Background(), r)
+	if err != nil {
+		t.Fatalf("Normalize failed: %v", err)
+	}
+
+	if _, ok := result.Body.Get("ism_template"); ok {
+		t.Error("expected null ism_template to be stripped")
+	}
+}
+
+func TestISMPolicyNormalize_strips_default_retry(t *testing.T) {
+	h := &ismPolicyHandler{}
+	r := provider.Resource{
+		ID: provider.ResourceID{Type: "opensearch_ism_policy", Name: "test"},
+		Body: buildMap(
+			"default_state", provider.StringVal("hot"),
+			"states", provider.ListVal([]provider.Value{
+				provider.MapVal(buildMap(
+					"name", provider.StringVal("delete"),
+					"actions", provider.ListVal([]provider.Value{
+						provider.MapVal(buildMap(
+							"delete", provider.MapVal(provider.NewOrderedMap()),
+							"retry", provider.MapVal(buildMap(
+								"count", provider.IntVal(3),
+								"backoff", provider.StringVal("exponential"),
+								"delay", provider.StringVal("1m"),
+							)),
+						)),
+					}),
+				)),
+			}),
+		),
+	}
+
+	result, err := h.Normalize(context.Background(), r)
+	if err != nil {
+		t.Fatalf("Normalize failed: %v", err)
+	}
+
+	states, _ := result.Body.Get("states")
+	action := states.List[0].Map
+	actions, _ := action.Get("actions")
+	first := actions.List[0].Map
+	if _, ok := first.Get("retry"); ok {
+		t.Error("expected default retry to be stripped")
+	}
+	if _, ok := first.Get("delete"); !ok {
+		t.Error("expected delete action to remain")
+	}
+}
+
+func TestISMPolicyNormalize_preserves_custom_retry(t *testing.T) {
+	h := &ismPolicyHandler{}
+	r := provider.Resource{
+		ID: provider.ResourceID{Type: "opensearch_ism_policy", Name: "test"},
+		Body: buildMap(
+			"default_state", provider.StringVal("hot"),
+			"states", provider.ListVal([]provider.Value{
+				provider.MapVal(buildMap(
+					"name", provider.StringVal("delete"),
+					"actions", provider.ListVal([]provider.Value{
+						provider.MapVal(buildMap(
+							"delete", provider.MapVal(provider.NewOrderedMap()),
+							"retry", provider.MapVal(buildMap(
+								"count", provider.IntVal(5),
+								"backoff", provider.StringVal("exponential"),
+								"delay", provider.StringVal("1m"),
+							)),
+						)),
+					}),
+				)),
+			}),
+		),
+	}
+
+	result, err := h.Normalize(context.Background(), r)
+	if err != nil {
+		t.Fatalf("Normalize failed: %v", err)
+	}
+
+	states, _ := result.Body.Get("states")
+	action := states.List[0].Map
+	actions, _ := action.Get("actions")
+	first := actions.List[0].Map
+	retry, ok := first.Get("retry")
+	if !ok {
+		t.Fatal("expected custom retry to be preserved")
+	}
+	count, _ := retry.Map.Get("count")
+	if count.Int != 5 {
+		t.Errorf("expected retry.count to be 5, got %d", count.Int)
+	}
+}
+
 func TestISMPolicyNormalize_idempotent(t *testing.T) {
 	h := &ismPolicyHandler{}
 	r := provider.Resource{
