@@ -40,17 +40,17 @@ func TestConfigure(t *testing.T) {
 		},
 		{
 			name:      "unknown auth mode",
-			config:    configMap("endpoint", "localhost:3306", "auth", "ldap", "username", "u", "password", "p"),
+			config:    configMap("endpoint", "localhost:3306", "auth", "ldap", "username", "u", "password", "p", "version", "8.4"),
 			errSubstr: `auth must be "password" or "rds_iam"`,
 		},
 		{
 			name:      "password mode missing username",
-			config:    configMap("endpoint", "localhost:3306", "auth", "password", "password", "p"),
+			config:    configMap("endpoint", "localhost:3306", "auth", "password", "password", "p", "version", "8.4"),
 			errSubstr: `"username" is required`,
 		},
 		{
 			name:      "password mode missing password",
-			config:    configMap("endpoint", "localhost:3306", "auth", "password", "username", "u"),
+			config:    configMap("endpoint", "localhost:3306", "auth", "password", "username", "u", "version", "8.4"),
 			errSubstr: `"password" is required`,
 		},
 		{
@@ -60,9 +60,42 @@ func TestConfigure(t *testing.T) {
 				"auth", "password",
 				"username", "u",
 				"password", "p",
+				"version", "8.4",
 				"tls", "bogus",
 			),
 			errSubstr: `"tls" must be "required", "skip-verify", or "disabled"`,
+		},
+		{
+			name: "missing version",
+			config: configMap(
+				"endpoint", "localhost:3306",
+				"auth", "password",
+				"username", "u",
+				"password", "p",
+			),
+			errSubstr: `"version" is required`,
+		},
+		{
+			name: "version 5.7 deferred",
+			config: configMap(
+				"endpoint", "localhost:3306",
+				"auth", "password",
+				"username", "u",
+				"password", "p",
+				"version", "5.7",
+			),
+			errSubstr: `version "5.7" is not supported`,
+		},
+		{
+			name: "unknown version",
+			config: configMap(
+				"endpoint", "localhost:3306",
+				"auth", "password",
+				"username", "u",
+				"password", "p",
+				"version", "9.9",
+			),
+			errSubstr: `version must be "8.0" or "8.4"`,
 		},
 	}
 
