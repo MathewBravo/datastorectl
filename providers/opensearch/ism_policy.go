@@ -11,8 +11,44 @@ import (
 	"github.com/MathewBravo/datastorectl/provider"
 )
 
+const (
+	ismDefaultRetryCount   = 3
+	ismDefaultRetryBackoff = "exponential"
+	ismDefaultRetryDelay   = "1m"
+)
+
 // ismPolicyHandler implements resourceHandler for opensearch_ism_policy resources.
 type ismPolicyHandler struct{}
+
+// isDefaultRetryJSON reports whether a raw JSON retry map equals the server
+// default that OpenSearch injects into every action body. Keeping this check
+// centralized makes the "preserve user overrides" contract explicit.
+func isDefaultRetryJSON(m map[string]any) bool {
+	if len(m) != 3 {
+		return false
+	}
+	count, cok := m["count"].(float64) // JSON numbers decode as float64
+	backoff, bok := m["backoff"].(string)
+	delay, dok := m["delay"].(string)
+	return cok && bok && dok &&
+		int(count) == ismDefaultRetryCount &&
+		backoff == ismDefaultRetryBackoff &&
+		delay == ismDefaultRetryDelay
+}
+
+// isDefaultRetryValue is the provider.Value equivalent used during Normalize.
+func isDefaultRetryValue(v provider.Value) bool {
+	if v.Kind != provider.KindMap || v.Map == nil || v.Map.Len() != 3 {
+		return false
+	}
+	count, cok := v.Map.Get("count")
+	backoff, bok := v.Map.Get("backoff")
+	delay, dok := v.Map.Get("delay")
+	return cok && bok && dok &&
+		count.Kind == provider.KindInt && count.Int == ismDefaultRetryCount &&
+		backoff.Kind == provider.KindString && backoff.Str == ismDefaultRetryBackoff &&
+		delay.Kind == provider.KindString && delay.Str == ismDefaultRetryDelay
+}
 
 // Discover fetches all ISM policies from OpenSearch, handling pagination.
 func (h *ismPolicyHandler) Discover(ctx context.Context, client *Client) ([]provider.Resource, error) {
@@ -50,6 +86,34 @@ func (h *ismPolicyHandler) Discover(ctx context.Context, client *Client) ([]prov
 			// Strip error_notification if null.
 			if v, ok := policyData["error_notification"]; ok && v == nil {
 				delete(policyData, "error_notification")
+			}
+
+			// Strip ism_template if null — semantically identical to absent.
+			if v, ok := policyData["ism_template"]; ok && v == nil {
+				delete(policyData, "ism_template")
+			}
+
+			// Strip default retry from each action body in each state.
+			if states, ok := policyData["states"].([]any); ok {
+				for _, state := range states {
+					sm, ok := state.(map[string]any)
+					if !ok {
+						continue
+					}
+					actions, ok := sm["actions"].([]any)
+					if !ok {
+						continue
+					}
+					for _, action := range actions {
+						am, ok := action.(map[string]any)
+						if !ok {
+							continue
+						}
+						if retry, ok := am["retry"].(map[string]any); ok && isDefaultRetryJSON(retry) {
+							delete(am, "retry")
+						}
+					}
+				}
 			}
 
 			// Strip last_updated_time from ism_template entries.
@@ -100,6 +164,32 @@ func (h *ismPolicyHandler) Normalize(_ context.Context, r provider.Resource) (pr
 	// Strip error_notification if null.
 	if v, ok := body.Get("error_notification"); ok && v.Kind == provider.KindNull {
 		body.Delete("error_notification")
+	}
+
+	// Strip ism_template if null — mirrors Discover.
+	if v, ok := body.Get("ism_template"); ok && v.Kind == provider.KindNull {
+		body.Delete("ism_template")
+	}
+
+	// Strip default retry from each action body in each state.
+	if states, ok := body.Get("states"); ok && states.Kind == provider.KindList {
+		for _, state := range states.List {
+			if state.Kind != provider.KindMap || state.Map == nil {
+				continue
+			}
+			actions, ok := state.Map.Get("actions")
+			if !ok || actions.Kind != provider.KindList {
+				continue
+			}
+			for _, action := range actions.List {
+				if action.Kind != provider.KindMap || action.Map == nil {
+					continue
+				}
+				if retry, ok := action.Map.Get("retry"); ok && isDefaultRetryValue(retry) {
+					action.Map.Delete("retry")
+				}
+			}
+		}
 	}
 
 	// Process ism_template entries: strip last_updated_time and sort.
