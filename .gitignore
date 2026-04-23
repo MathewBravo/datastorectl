@@ -30,3 +30,6 @@ vendor/
 
 # Local docs and plans — kept out of version control
 docs/
+
+# Domain glossary (local reference)
+UBIQUITOUS_LANGUAGE.md
