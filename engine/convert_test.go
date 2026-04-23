@@ -1256,7 +1256,7 @@ func TestConvertBlocks_schema_single_block_as_list(t *testing.T) {
 	schemas := map[string]provider.Schema{
 		"opensearch_role": {
 			Fields: map[string]provider.FieldHint{
-				"index_permissions": provider.FieldBlockList,
+				"index_permissions": {Kind: provider.FieldBlockList},
 			},
 		},
 	}
@@ -1299,7 +1299,7 @@ func TestConvertBlocks_schema_list_multiple_blocks(t *testing.T) {
 	}
 	schemas := map[string]provider.Schema{
 		"opensearch_role": {
-			Fields: map[string]provider.FieldHint{"index_permissions": provider.FieldBlockList},
+			Fields: map[string]provider.FieldHint{"index_permissions": {Kind: provider.FieldBlockList}},
 		},
 	}
 
@@ -1331,7 +1331,7 @@ func TestConvertBlocks_schema_map_single_block(t *testing.T) {
 	}
 	schemas := map[string]provider.Schema{
 		"opensearch_component_template": {
-			Fields: map[string]provider.FieldHint{"template": provider.FieldBlockMap},
+			Fields: map[string]provider.FieldHint{"template": {Kind: provider.FieldBlockMap}},
 		},
 	}
 
@@ -1359,7 +1359,7 @@ func TestConvertBlocks_schema_map_multiple_blocks_errors(t *testing.T) {
 	}
 	schemas := map[string]provider.Schema{
 		"opensearch_component_template": {
-			Fields: map[string]provider.FieldHint{"template": provider.FieldBlockMap},
+			Fields: map[string]provider.FieldHint{"template": {Kind: provider.FieldBlockMap}},
 		},
 	}
 
@@ -1385,7 +1385,7 @@ func TestConvertBlocks_schema_undeclared_block_errors(t *testing.T) {
 	}
 	schemas := map[string]provider.Schema{
 		"opensearch_role": {
-			Fields: map[string]provider.FieldHint{"index_permissions": provider.FieldBlockList},
+			Fields: map[string]provider.FieldHint{"index_permissions": {Kind: provider.FieldBlockList}},
 		},
 	}
 

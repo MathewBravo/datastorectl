@@ -174,7 +174,7 @@ func convertBody(attrs []dcl.Attribute, blocks []dcl.Block, schema *provider.Sch
 	for _, g := range groups {
 		hint := fieldHintFor(schema, g.typ)
 
-		switch hint {
+		switch hint.Kind {
 		case provider.FieldBlockList:
 			// Always produce a list, even for a single block.
 			elems := make([]provider.Value, len(g.blocks))
@@ -227,10 +227,11 @@ func convertBody(attrs []dcl.Attribute, blocks []dcl.Block, schema *provider.Sch
 }
 
 // fieldHintFor returns the FieldHint for a block type from the schema.
-// Returns 0 (no hint) if the schema is nil or doesn't contain the field.
+// Returns the zero value (Kind = 0, no constraints) if the schema is
+// nil or doesn't contain the field.
 func fieldHintFor(schema *provider.Schema, blockType string) provider.FieldHint {
 	if schema == nil || schema.Fields == nil {
-		return 0
+		return provider.FieldHint{}
 	}
 	return schema.Fields[blockType]
 }
