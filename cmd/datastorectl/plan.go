@@ -86,7 +86,7 @@ func runPlan(cmd *cobra.Command, args []string) error {
 
 	// 4. Run the engine plan.
 	eng := createEngine()
-	plan, _, err := eng.Plan(ctx, file, nil)
+	plan, _, err := eng.Plan(ctx, file, nil, engine.PlanOptions{})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return errExit{code: 1}

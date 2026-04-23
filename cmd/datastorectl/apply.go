@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/MathewBravo/datastorectl/config"
+	"github.com/MathewBravo/datastorectl/engine"
 	"github.com/MathewBravo/datastorectl/output"
 	"github.com/spf13/cobra"
 )
@@ -86,7 +87,7 @@ func runApply(cmd *cobra.Command, args []string) error {
 
 	// 4. Dry run path.
 	if dryRun {
-		plan, err := eng.DryRun(ctx, file, nil)
+		plan, err := eng.DryRun(ctx, file, nil, engine.PlanOptions{})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return errExit{code: 1}
@@ -117,7 +118,7 @@ func runApply(cmd *cobra.Command, args []string) error {
 	}
 
 	// 5. Full apply path.
-	result, err := eng.Apply(ctx, file, nil)
+	result, err := eng.Apply(ctx, file, nil, engine.PlanOptions{})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return errExit{code: 1}

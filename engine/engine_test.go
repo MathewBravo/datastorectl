@@ -102,7 +102,7 @@ func TestEnginePlan(t *testing.T) {
 			provider.ResourceID{Type: "eng1_policy", Name: "ro"},
 		)
 
-		plan, graph, err := e.Plan(context.Background(), file, nil)
+		plan, graph, err := e.Plan(context.Background(), file, nil, PlanOptions{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -144,7 +144,7 @@ func TestEnginePlan(t *testing.T) {
 		}
 
 		e := &Engine{SecretResolver: stubSecretResolver{}}
-		plan, _, err := e.Plan(context.Background(), file, nil)
+		plan, _, err := e.Plan(context.Background(), file, nil, PlanOptions{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -181,7 +181,7 @@ func TestEnginePlan(t *testing.T) {
 		file.Blocks = append(file.Blocks, dcl.Block{Type: "eng3_svc", Label: "keeper"})
 
 		e := &Engine{SecretResolver: stubSecretResolver{}}
-		plan, _, err := e.Plan(context.Background(), file, nil)
+		plan, _, err := e.Plan(context.Background(), file, nil, PlanOptions{Prune: true})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -208,7 +208,7 @@ func TestEnginePlan(t *testing.T) {
 		}
 
 		e := &Engine{SecretResolver: stubSecretResolver{}}
-		_, graph, err := e.Plan(context.Background(), file, nil)
+		_, graph, err := e.Plan(context.Background(), file, nil, PlanOptions{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -261,7 +261,7 @@ func TestEnginePlan(t *testing.T) {
 		}
 
 		e := &Engine{SecretResolver: stubSecretResolver{}}
-		plan, _, err := e.Plan(context.Background(), file, nil)
+		plan, _, err := e.Plan(context.Background(), file, nil, PlanOptions{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -287,7 +287,7 @@ func TestEnginePlan(t *testing.T) {
 		)
 
 		e := &Engine{SecretResolver: stubSecretResolver{}}
-		_, _, err := e.Plan(context.Background(), file, nil)
+		_, _, err := e.Plan(context.Background(), file, nil, PlanOptions{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -311,7 +311,7 @@ func TestEnginePlan(t *testing.T) {
 		file := makeFile(provider.ResourceID{Type: "eng7_svc", Name: "desired"})
 
 		e := &Engine{SecretResolver: stubSecretResolver{}}
-		plan, _, err := e.Plan(context.Background(), file, nil)
+		plan, _, err := e.Plan(context.Background(), file, nil, PlanOptions{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -323,7 +323,7 @@ func TestEnginePlan(t *testing.T) {
 
 	t.Run("convert_error", func(t *testing.T) {
 		e := &Engine{SecretResolver: stubSecretResolver{}}
-		_, _, err := e.Plan(context.Background(), nil, nil)
+		_, _, err := e.Plan(context.Background(), nil, nil, PlanOptions{})
 		if err == nil {
 			t.Fatal("expected error for nil file")
 		}
@@ -337,7 +337,7 @@ func TestEnginePlan(t *testing.T) {
 		file := makeFile(provider.ResourceID{Type: "eng8unknown_svc", Name: "a"})
 
 		e := &Engine{SecretResolver: stubSecretResolver{}}
-		_, _, err := e.Plan(context.Background(), file, nil)
+		_, _, err := e.Plan(context.Background(), file, nil, PlanOptions{})
 		if err == nil {
 			t.Fatal("expected error for unknown provider")
 		}
@@ -359,7 +359,7 @@ func TestEnginePlan(t *testing.T) {
 		file := makeFile(provider.ResourceID{Type: "eng9_svc", Name: "a"})
 
 		e := &Engine{SecretResolver: stubSecretResolver{}}
-		_, _, err := e.Plan(context.Background(), file, nil)
+		_, _, err := e.Plan(context.Background(), file, nil, PlanOptions{})
 		if err == nil {
 			t.Fatal("expected error from discover")
 		}
@@ -383,7 +383,7 @@ func TestEnginePlan(t *testing.T) {
 		}
 
 		e := &Engine{SecretResolver: stubSecretResolver{}}
-		_, _, err := e.Plan(context.Background(), file, nil)
+		_, _, err := e.Plan(context.Background(), file, nil, PlanOptions{})
 		if err == nil {
 			t.Fatal("expected error for malformed reference")
 		}
@@ -411,7 +411,7 @@ func TestEnginePlan(t *testing.T) {
 		}
 
 		e := &Engine{SecretResolver: failSecretResolver{err: errTestFail}}
-		_, _, err := e.Plan(context.Background(), file, nil)
+		_, _, err := e.Plan(context.Background(), file, nil, PlanOptions{})
 		if err == nil {
 			t.Fatal("expected error for secret resolution failure")
 		}
@@ -433,7 +433,7 @@ func TestEnginePlan(t *testing.T) {
 		file := makeFile(provider.ResourceID{Type: "eng12_svc", Name: "a"})
 
 		e := &Engine{SecretResolver: stubSecretResolver{}}
-		_, _, err := e.Plan(context.Background(), file, nil)
+		_, _, err := e.Plan(context.Background(), file, nil, PlanOptions{})
 		if err == nil {
 			t.Fatal("expected error from normalize")
 		}
@@ -462,7 +462,7 @@ func TestEnginePlan(t *testing.T) {
 		}
 
 		e := &Engine{SecretResolver: stubSecretResolver{}}
-		_, graph, err := e.Plan(context.Background(), file, nil)
+		_, graph, err := e.Plan(context.Background(), file, nil, PlanOptions{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -481,7 +481,7 @@ func TestEnginePlan(t *testing.T) {
 		e := &Engine{SecretResolver: stubSecretResolver{}}
 		file := &dcl.File{}
 
-		plan, graph, err := e.Plan(context.Background(), file, nil)
+		plan, graph, err := e.Plan(context.Background(), file, nil, PlanOptions{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -517,7 +517,7 @@ func TestEnginePlan(t *testing.T) {
 		file := makeFile(provider.ResourceID{Type: "eng14_svc", Name: "a"})
 
 		e := &Engine{SecretResolver: stubSecretResolver{}}
-		_, _, err := e.Plan(ctx, file, nil)
+		_, _, err := e.Plan(ctx, file, nil, PlanOptions{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -553,7 +553,7 @@ func TestEngineApply(t *testing.T) {
 			provider.ResourceID{Type: "aeng1_policy", Name: "ro"},
 		)
 
-		result, err := e.Apply(context.Background(), file, nil)
+		result, err := e.Apply(context.Background(), file, nil, PlanOptions{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -602,7 +602,7 @@ func TestEngineApply(t *testing.T) {
 		}
 
 		e := &Engine{SecretResolver: stubSecretResolver{}}
-		result, err := e.Apply(context.Background(), file, nil)
+		result, err := e.Apply(context.Background(), file, nil, PlanOptions{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -633,7 +633,7 @@ func TestEngineApply(t *testing.T) {
 		file := makeFile(provider.ResourceID{Type: "aeng3_svc", Name: "keeper"})
 
 		e := &Engine{SecretResolver: stubSecretResolver{}}
-		result, err := e.Apply(context.Background(), file, nil)
+		result, err := e.Apply(context.Background(), file, nil, PlanOptions{Prune: true})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -678,7 +678,7 @@ func TestEngineApply(t *testing.T) {
 		}
 
 		e := &Engine{SecretResolver: stubSecretResolver{}}
-		result, err := e.Apply(context.Background(), file, nil)
+		result, err := e.Apply(context.Background(), file, nil, PlanOptions{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -706,7 +706,7 @@ func TestEngineApply(t *testing.T) {
 		file := makeFile(provider.ResourceID{Type: "aeng5_svc", Name: "a"})
 
 		e := &Engine{SecretResolver: stubSecretResolver{}}
-		_, err := e.Apply(context.Background(), file, nil)
+		_, err := e.Apply(context.Background(), file, nil, PlanOptions{})
 		if err == nil {
 			t.Fatal("expected validation error")
 		}
@@ -720,7 +720,7 @@ func TestEngineApply(t *testing.T) {
 
 	t.Run("plan_error_propagates", func(t *testing.T) {
 		e := &Engine{SecretResolver: stubSecretResolver{}}
-		_, err := e.Apply(context.Background(), nil, nil)
+		_, err := e.Apply(context.Background(), nil, nil, PlanOptions{})
 		if err == nil {
 			t.Fatal("expected error for nil file")
 		}
@@ -743,7 +743,7 @@ func TestEngineApply(t *testing.T) {
 		file := makeFile(provider.ResourceID{Type: "aeng7_svc", Name: "a"})
 
 		e := &Engine{SecretResolver: stubSecretResolver{}}
-		result, err := e.Apply(context.Background(), file, nil)
+		result, err := e.Apply(context.Background(), file, nil, PlanOptions{})
 		if err != nil {
 			t.Fatalf("expected nil error from Apply, got: %v", err)
 		}
@@ -772,7 +772,7 @@ func TestEngineApply(t *testing.T) {
 		file := makeFile(provider.ResourceID{Type: "aeng8_svc", Name: "a"})
 
 		e := &Engine{SecretResolver: stubSecretResolver{}}
-		_, err := e.Apply(ctx, file, nil)
+		_, err := e.Apply(ctx, file, nil, PlanOptions{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -802,7 +802,7 @@ func TestEngineDryRun(t *testing.T) {
 		)
 
 		e := &Engine{SecretResolver: stubSecretResolver{}}
-		plan, err := e.DryRun(context.Background(), file, nil)
+		plan, err := e.DryRun(context.Background(), file, nil, PlanOptions{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -825,7 +825,7 @@ func TestEngineDryRun(t *testing.T) {
 		file := makeFile(provider.ResourceID{Type: "dreng2_svc", Name: "a"})
 
 		e := &Engine{SecretResolver: stubSecretResolver{}}
-		_, err := e.DryRun(context.Background(), file, nil)
+		_, err := e.DryRun(context.Background(), file, nil, PlanOptions{})
 		if err == nil {
 			t.Fatal("expected validation error")
 		}
@@ -836,7 +836,7 @@ func TestEngineDryRun(t *testing.T) {
 
 	t.Run("plan_error_propagates", func(t *testing.T) {
 		e := &Engine{SecretResolver: stubSecretResolver{}}
-		_, err := e.DryRun(context.Background(), nil, nil)
+		_, err := e.DryRun(context.Background(), nil, nil, PlanOptions{})
 		if err == nil {
 			t.Fatal("expected error for nil file")
 		}
@@ -946,7 +946,7 @@ func TestEnginePlan_TypeOrderings(t *testing.T) {
 		)
 
 		e := &Engine{SecretResolver: stubSecretResolver{}}
-		_, graph, err := e.Plan(context.Background(), file, nil)
+		_, graph, err := e.Plan(context.Background(), file, nil, PlanOptions{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -973,7 +973,7 @@ func TestEnginePlan_TypeOrderings(t *testing.T) {
 		)
 
 		e := &Engine{SecretResolver: stubSecretResolver{}}
-		_, graph, err := e.Plan(context.Background(), file, nil)
+		_, graph, err := e.Plan(context.Background(), file, nil, PlanOptions{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -983,4 +983,66 @@ func TestEnginePlan_TypeOrderings(t *testing.T) {
 			t.Errorf("expected no edges between unrelated types, got deps: %v", deps)
 		}
 	})
+}
+
+func TestEnginePlan_AdditiveDefault_SuppressesDeletes(t *testing.T) {
+	// Live has an orphan resource not in the DCL. With Prune off (default),
+	// it must appear in Unmanaged, not Changes.
+	mock := &mockEngineProvider{
+		discoverFn: func(context.Context) ([]provider.Resource, dcl.Diagnostics) {
+			return []provider.Resource{
+				{ID: rid("prune1_svc", "orphan"), Body: provider.NewOrderedMap()},
+				{ID: rid("prune1_svc", "keeper"), Body: provider.NewOrderedMap()},
+			}, nil
+		},
+	}
+	provider.Register("prune1", func() provider.Provider { return mock })
+
+	file := makeFile(provider.ResourceID{Type: "prune1_svc", Name: "keeper"})
+
+	e := &Engine{SecretResolver: stubSecretResolver{}}
+	plan, _, err := e.Plan(context.Background(), file, nil, PlanOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(plan.Deletes()) != 0 {
+		t.Errorf("expected 0 deletes in Changes, got %d", len(plan.Deletes()))
+	}
+	if len(plan.Unmanaged) != 1 {
+		t.Fatalf("expected 1 unmanaged, got %d", len(plan.Unmanaged))
+	}
+	if plan.Unmanaged[0].ID.Name != "orphan" {
+		t.Errorf("Unmanaged[0].ID.Name = %q, want %q", plan.Unmanaged[0].ID.Name, "orphan")
+	}
+	if plan.HasChanges() {
+		t.Error("HasChanges() = true, want false (orphan is suppressed)")
+	}
+}
+
+func TestEnginePlan_PruneMode_IncludesDeletes(t *testing.T) {
+	mock := &mockEngineProvider{
+		discoverFn: func(context.Context) ([]provider.Resource, dcl.Diagnostics) {
+			return []provider.Resource{
+				{ID: rid("prune2_svc", "orphan"), Body: provider.NewOrderedMap()},
+			}, nil
+		},
+	}
+	provider.Register("prune2", func() provider.Provider { return mock })
+
+	file := makeFile(provider.ResourceID{Type: "prune2_svc", Name: "keeper"})
+
+	e := &Engine{SecretResolver: stubSecretResolver{}}
+	plan, _, err := e.Plan(context.Background(), file, nil, PlanOptions{Prune: true})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(plan.Deletes()) != 1 {
+		t.Fatalf("expected 1 delete in Changes, got %d", len(plan.Deletes()))
+	}
+	if len(plan.Unmanaged) != 0 {
+		t.Errorf("expected empty Unmanaged with Prune=true, got %d", len(plan.Unmanaged))
+	}
+	if !plan.HasChanges() {
+		t.Error("HasChanges() = false, want true")
+	}
 }
