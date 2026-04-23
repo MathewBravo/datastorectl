@@ -199,3 +199,37 @@ func TestFormatApplyResultJSON_summary(t *testing.T) {
 		t.Errorf("unexpected summary: %q", got.Summary)
 	}
 }
+
+func TestFormatPlanJSON_includes_guards(t *testing.T) {
+	plan := &engine.Plan{
+		Changes: []engine.ResourceChange{{
+			ID:   provider.ResourceID{Type: "opensearch_role_mapping", Name: "all_access"},
+			Type: engine.ChangeDelete,
+			Live: &provider.Resource{ID: provider.ResourceID{Type: "opensearch_role_mapping", Name: "all_access"}},
+		}},
+		Guards: []engine.Guard{{
+			Resource: provider.ResourceID{Type: "opensearch_role_mapping", Name: "all_access"},
+			Reason:   "would lock out caller",
+		}},
+	}
+
+	data, err := FormatPlanJSON(plan)
+	if err != nil {
+		t.Fatalf("FormatPlanJSON: %v", err)
+	}
+
+	var got jsonPlan
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if len(got.Guards) != 1 {
+		t.Fatalf("got %d guards, want 1", len(got.Guards))
+	}
+	if got.Guards[0].Resource.Name != "all_access" {
+		t.Errorf("guards[0].Resource.Name = %q", got.Guards[0].Resource.Name)
+	}
+	if got.Guards[0].Reason != "would lock out caller" {
+		t.Errorf("guards[0].Reason = %q", got.Guards[0].Reason)
+	}
+}

@@ -12,11 +12,17 @@ import (
 type jsonPlan struct {
 	Changes   []jsonChange    `json:"changes"`
 	Unmanaged []jsonUnmanaged `json:"unmanaged,omitempty"`
+	Guards    []jsonGuard     `json:"guards,omitempty"`
 	Summary   string          `json:"summary"`
 }
 
 type jsonUnmanaged struct {
 	ID jsonResourceID `json:"id"`
+}
+
+type jsonGuard struct {
+	Resource jsonResourceID `json:"resource"`
+	Reason   string         `json:"reason"`
 }
 
 type jsonChange struct {
@@ -82,6 +88,13 @@ func FormatPlanJSON(plan *engine.Plan) ([]byte, error) {
 		jp.Unmanaged = make([]jsonUnmanaged, len(plan.Unmanaged))
 		for i, u := range plan.Unmanaged {
 			jp.Unmanaged[i] = jsonUnmanaged{ID: toJSONID(u.ID)}
+		}
+	}
+
+	if len(plan.Guards) > 0 {
+		jp.Guards = make([]jsonGuard, len(plan.Guards))
+		for i, g := range plan.Guards {
+			jp.Guards[i] = jsonGuard{Resource: toJSONID(g.Resource), Reason: g.Reason}
 		}
 	}
 

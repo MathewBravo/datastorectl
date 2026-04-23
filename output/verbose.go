@@ -12,6 +12,7 @@ import (
 // Creates show the full desired body. Updates show diffs, desired, and live bodies.
 // Deletes show the full live body.
 func FormatPlanVerbose(plan *engine.Plan, color bool) string {
+	guards := guardMap(plan.Guards)
 	var blocks []string
 	for _, c := range plan.Changes {
 		switch c.Type {
@@ -20,7 +21,7 @@ func FormatPlanVerbose(plan *engine.Plan, color bool) string {
 		case engine.ChangeUpdate:
 			blocks = append(blocks, formatVerboseUpdate(c, color))
 		case engine.ChangeDelete:
-			blocks = append(blocks, formatVerboseDelete(c, color))
+			blocks = append(blocks, formatVerboseDelete(c, guards[c.ID], color))
 		}
 	}
 	if len(blocks) == 0 && len(plan.Unmanaged) == 0 {
@@ -62,10 +63,17 @@ func formatVerboseUpdate(c engine.ResourceChange, color bool) string {
 	return b.String()
 }
 
-func formatVerboseDelete(c engine.ResourceChange, color bool) string {
+func formatVerboseDelete(c engine.ResourceChange, guard engine.Guard, color bool) string {
 	var b strings.Builder
 	header := fmt.Sprintf("- %s (delete)", c.ID)
+	if guard.Reason != "" {
+		header += "  (would lock out caller)"
+	}
 	b.WriteString(red(header, color))
+
+	if guard.Reason != "" {
+		b.WriteString("\n    ! " + guard.Reason)
+	}
 
 	if c.Live != nil && c.Live.Body != nil {
 		writeBody(&b, c.Live.Body, color, ansiRed)
