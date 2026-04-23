@@ -26,6 +26,44 @@ opensearch_role_mapping "log_reader" {
   description   = "Map IAM role to log_reader"
 }
 
+# Bootstrap role mappings shipped by OpenSearch's security plugin.
+# Declared verbatim so prune sees them as no-ops instead of deletes.
+# Without these declarations, apply would delete all_access (locking
+# out admin) and the five other bootstrap mappings.
+
+opensearch_role_mapping "all_access" {
+  context       = demo
+  backend_roles = ["admin"]
+  description   = "Maps admin to all_access"
+}
+
+opensearch_role_mapping "readall" {
+  context       = demo
+  backend_roles = ["readall"]
+}
+
+opensearch_role_mapping "own_index" {
+  context     = demo
+  users       = ["*"]
+  description = "Allow full access to an index named like the username"
+}
+
+opensearch_role_mapping "logstash" {
+  context       = demo
+  backend_roles = ["logstash"]
+}
+
+opensearch_role_mapping "kibana_user" {
+  context       = demo
+  backend_roles = ["kibanauser"]
+  description   = "Maps kibanauser to kibana_user"
+}
+
+opensearch_role_mapping "manage_snapshots" {
+  context       = demo
+  backend_roles = ["snapshotrestore"]
+}
+
 opensearch_ism_policy "hot_delete" {
   context = demo
 
