@@ -122,6 +122,49 @@ func TestFormatPlan_includes_summary(t *testing.T) {
 	}
 }
 
+func TestFormatPlan_unmanaged_only(t *testing.T) {
+	plan := &engine.Plan{
+		Unmanaged: []engine.ResourceChange{
+			{ID: provider.ResourceID{Type: "t", Name: "x"}, Type: engine.ChangeDelete},
+			{ID: provider.ResourceID{Type: "t", Name: "y"}, Type: engine.ChangeDelete},
+		},
+	}
+	got := FormatPlan(plan, false)
+	// Must surface the unmanaged count; must NOT render per-resource delete lines.
+	if !strings.Contains(got, "2 unmanaged resources") {
+		t.Errorf("FormatPlan missing unmanaged count: %q", got)
+	}
+	if strings.Contains(got, "(delete)") {
+		t.Errorf("FormatPlan listed deletes per-resource when it shouldn't: %q", got)
+	}
+	if got == "No changes." {
+		t.Errorf("FormatPlan returned 'No changes.' but there are unmanaged resources")
+	}
+}
+
+func TestFormatPlan_creates_with_unmanaged(t *testing.T) {
+	desired := provider.NewOrderedMap()
+	desired.Set("name", provider.StringVal("hello"))
+	plan := &engine.Plan{
+		Changes: []engine.ResourceChange{
+			{
+				ID: provider.ResourceID{Type: "t", Name: "new"}, Type: engine.ChangeCreate,
+				Desired: &provider.Resource{ID: provider.ResourceID{Type: "t", Name: "new"}, Body: desired},
+			},
+		},
+		Unmanaged: []engine.ResourceChange{
+			{ID: provider.ResourceID{Type: "t", Name: "orphan"}, Type: engine.ChangeDelete},
+		},
+	}
+	got := FormatPlan(plan, false)
+	if !strings.Contains(got, "+ t.new (create)") {
+		t.Errorf("FormatPlan missing create line: %q", got)
+	}
+	if !strings.Contains(got, "1 unmanaged resources") {
+		t.Errorf("FormatPlan missing unmanaged count: %q", got)
+	}
+}
+
 func TestShouldColor_no_color_env(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
 	// Any writer — should return false due to NO_COLOR.

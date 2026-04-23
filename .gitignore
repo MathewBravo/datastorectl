@@ -27,3 +27,6 @@ vendor/
 
 # Worktrees
 .worktrees/
+
+# Local docs and plans — kept out of version control
+docs/

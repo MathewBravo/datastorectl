@@ -3,6 +3,7 @@ package output
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/MathewBravo/datastorectl/engine"
@@ -141,6 +142,41 @@ func TestFormatApplyResultJSON_mixed(t *testing.T) {
 	}
 	if got.Results[2].Status != "skipped" {
 		t.Errorf("expected skipped, got %q", got.Results[2].Status)
+	}
+}
+
+func TestFormatPlanJSON_includes_unmanaged(t *testing.T) {
+	plan := &engine.Plan{
+		Changes: []engine.ResourceChange{},
+		Unmanaged: []engine.ResourceChange{
+			{ID: provider.ResourceID{Type: "opensearch_role", Name: "orphan"}, Type: engine.ChangeDelete},
+		},
+	}
+	data, err := FormatPlanJSON(plan)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var got struct {
+		Unmanaged []struct {
+			ID struct {
+				Type string `json:"type"`
+				Name string `json:"name"`
+			} `json:"id"`
+		} `json:"unmanaged"`
+		Summary string `json:"summary"`
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+	if len(got.Unmanaged) != 1 {
+		t.Fatalf("unmanaged len = %d, want 1", len(got.Unmanaged))
+	}
+	if got.Unmanaged[0].ID.Type != "opensearch_role" || got.Unmanaged[0].ID.Name != "orphan" {
+		t.Errorf("Unmanaged[0].ID = %+v, want {opensearch_role, orphan}", got.Unmanaged[0].ID)
+	}
+	if !strings.Contains(got.Summary, "unmanaged") {
+		t.Errorf("Summary missing unmanaged mention: %q", got.Summary)
 	}
 }
 

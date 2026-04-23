@@ -79,6 +79,24 @@ func TestFormatPlanVerbose_delete_shows_live(t *testing.T) {
 	}
 }
 
+func TestFormatPlanVerbose_unmanaged_only(t *testing.T) {
+	plan := &engine.Plan{
+		Unmanaged: []engine.ResourceChange{
+			{ID: provider.ResourceID{Type: "t", Name: "x"}, Type: engine.ChangeDelete},
+		},
+	}
+	got := FormatPlanVerbose(plan, false)
+	if !strings.Contains(got, "1 unmanaged resources") {
+		t.Errorf("FormatPlanVerbose missing unmanaged count: %q", got)
+	}
+	if strings.Contains(got, "(delete)") {
+		t.Errorf("FormatPlanVerbose listed delete per-resource: %q", got)
+	}
+	if got == "No changes." {
+		t.Errorf("FormatPlanVerbose returned 'No changes.' with unmanaged present")
+	}
+}
+
 func TestFormatPlanVerbose_no_color(t *testing.T) {
 	desired := &provider.Resource{ID: rid("svc", "a"), Body: provider.NewOrderedMap()}
 	desired.Body.Set("x", provider.StringVal("y"))

@@ -41,11 +41,26 @@ type ResourceChange struct {
 }
 
 // Plan holds the full set of resource changes the engine intends to apply.
+// Changes are the actions that will execute (creates, updates, and — when
+// pruning is enabled — deletes). Unmanaged carries delete changes that were
+// discovered but suppressed because pruning is off; they are informational
+// only and never executed.
 type Plan struct {
-	Changes []ResourceChange
+	Changes   []ResourceChange
+	Unmanaged []ResourceChange
+}
+
+// PlanOptions tunes the planning pipeline. Zero value means additive-only:
+// creates and updates are planned, deletes are surfaced as Unmanaged.
+type PlanOptions struct {
+	// Prune includes delete changes in Plan.Changes. When false, deletes
+	// move to Plan.Unmanaged and are neither displayed per-resource nor
+	// executed.
+	Prune bool
 }
 
 // HasChanges reports whether the plan contains any non-no-op changes.
+// Unmanaged resources do not count — they are suppressed from execution.
 func (p Plan) HasChanges() bool {
 	for _, c := range p.Changes {
 		if c.Type != ChangeNoOp {
@@ -65,7 +80,8 @@ func (p Plan) Updates() []ResourceChange {
 	return p.filterByType(ChangeUpdate)
 }
 
-// Deletes returns all changes with type ChangeDelete.
+// Deletes returns delete changes from Plan.Changes. This is only populated
+// when PlanOptions.Prune was true; otherwise deletes live in Plan.Unmanaged.
 func (p Plan) Deletes() []ResourceChange {
 	return p.filterByType(ChangeDelete)
 }
@@ -81,7 +97,22 @@ func (p Plan) filterByType(t ChangeType) []ResourceChange {
 }
 
 // Summary returns a human-readable summary of the plan.
+// Plan.Changes containing delete entries and Plan.Unmanaged being non-empty are mutually exclusive — the engine maintains this invariant.
+// Format depends on whether pruning is active (indicated by the presence of
+// delete changes in Plan.Changes vs Plan.Unmanaged):
+//   - additive mode, no unmanaged: "Plan: X to create, Y to update"
+//   - additive mode with unmanaged: "Plan: X to create, Y to update (N unmanaged resources — use --prune to delete)"
+//   - prune mode: "Plan: X to create, Y to update, Z to delete"
 func (p Plan) Summary() string {
 	creates, updates, deletes := len(p.Creates()), len(p.Updates()), len(p.Deletes())
-	return fmt.Sprintf("Plan: %d to create, %d to update, %d to delete", creates, updates, deletes)
+	unmanaged := len(p.Unmanaged)
+
+	if deletes > 0 {
+		// Prune mode — deletes already in Changes.
+		return fmt.Sprintf("Plan: %d to create, %d to update, %d to delete", creates, updates, deletes)
+	}
+	if unmanaged > 0 {
+		return fmt.Sprintf("Plan: %d to create, %d to update (%d unmanaged resources — use --prune to delete)", creates, updates, unmanaged)
+	}
+	return fmt.Sprintf("Plan: %d to create, %d to update", creates, updates)
 }

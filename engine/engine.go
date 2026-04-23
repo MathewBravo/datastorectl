@@ -25,7 +25,7 @@ type planResult struct {
 
 // plan runs the full planning pipeline: split → convert → configure → discover →
 // build graph → resolve references → resolve secrets → normalize → build plan.
-func (e *Engine) plan(ctx context.Context, file *dcl.File, configs map[string]*provider.OrderedMap) (*planResult, error) {
+func (e *Engine) plan(ctx context.Context, file *dcl.File, configs map[string]*provider.OrderedMap, opts PlanOptions) (*planResult, error) {
 	if file == nil {
 		return nil, fmt.Errorf("convert: cannot convert nil file")
 	}
@@ -52,14 +52,10 @@ func (e *Engine) plan(ctx context.Context, file *dcl.File, configs map[string]*p
 		if err != nil {
 			return nil, fmt.Errorf("parse contexts: %w", err)
 		}
-
-		// Strip context attribute from resources.
 		desired, err = config.ResolveResourceContexts(desired, contexts)
 		if err != nil {
 			return nil, fmt.Errorf("resolve resource contexts: %w", err)
 		}
-
-		// Build configs from contexts unless caller provided explicit configs.
 		if configs == nil {
 			configs, err = config.BuildConfigs(contexts)
 			if err != nil {
@@ -77,15 +73,15 @@ func (e *Engine) plan(ctx context.Context, file *dcl.File, configs map[string]*p
 		return nil, fmt.Errorf("configure providers: %w", err)
 	}
 
-	// 6. Discover live state from each unique provider.
+	// 6. Discover live state.
 	allLive, err := discover(ctx, providers)
 	if err != nil {
 		return nil, fmt.Errorf("discover: %w", err)
 	}
 
-	// 6b. Scope live resources to only types present in desired state.
-	// This prevents the engine from planning deletes for resource types
-	// the user didn't declare (e.g., built-in OpenSearch users).
+	// 6b. Scope live resources to declared types. This prevents the engine
+	// from planning deletes for resource types the user didn't declare
+	// (e.g., built-in OpenSearch users).
 	desiredTypes := make(map[string]struct{}, len(desired))
 	for _, r := range desired {
 		desiredTypes[r.ID.Type] = struct{}{}
@@ -97,19 +93,19 @@ func (e *Engine) plan(ctx context.Context, file *dcl.File, configs map[string]*p
 		}
 	}
 
-	// 7. Build the dependency graph BEFORE resolution (needs KindReference values).
+	// 7. Build dependency graph.
 	graph, err := BuildDependencyGraphWithOrdering(desired, orderings)
 	if err != nil {
 		return nil, fmt.Errorf("build dependency graph: %w", err)
 	}
 
-	// 8. Build an index of desired resources for reference resolution.
+	// 8. Build index for reference resolution.
 	index := make(map[provider.ResourceID]provider.Resource, len(desired))
 	for _, r := range desired {
 		index[r.ID] = r
 	}
 
-	// 9. Resolve cross-resource references in desired resources.
+	// 9. Resolve cross-resource references.
 	for i, r := range desired {
 		resolved, err := ResolveReferences(r, index)
 		if err != nil {
@@ -118,7 +114,7 @@ func (e *Engine) plan(ctx context.Context, file *dcl.File, configs map[string]*p
 		desired[i] = resolved
 	}
 
-	// 10. Resolve secret function calls in desired resources.
+	// 10. Resolve secrets.
 	for i, r := range desired {
 		resolved, err := ResolveSecrets(ctx, r, e.SecretResolver)
 		if err != nil {
@@ -127,22 +123,41 @@ func (e *Engine) plan(ctx context.Context, file *dcl.File, configs map[string]*p
 		desired[i] = resolved
 	}
 
-	// 11. Normalize desired resources.
+	// 11. Normalize desired.
 	normalizedDesired, err := NormalizeResources(ctx, desired, providers)
 	if err != nil {
 		return nil, fmt.Errorf("normalize desired: %w", err)
 	}
 
-	// 12. Normalize live resources.
+	// 12. Normalize live.
 	normalizedLive, err := NormalizeResources(ctx, live, providers)
 	if err != nil {
 		return nil, fmt.Errorf("normalize live: %w", err)
 	}
 
-	// 13. Build the plan by diffing desired against live.
+	// 13. Build full plan.
 	plan := BuildPlan(normalizedDesired, normalizedLive)
 
-	// 14. Add live-only (delete) resources to the graph so OrderPlan includes them.
+	// 14. Apply prune policy: when Prune=false, split deletes out of Changes
+	// into Unmanaged. The graph and executor only see Changes, so suppressing
+	// here is sufficient to make the rest of the pipeline additive-only.
+	if !opts.Prune {
+		kept := make([]ResourceChange, 0, len(plan.Changes))
+		var unmanaged []ResourceChange
+		for _, c := range plan.Changes {
+			if c.Type == ChangeDelete {
+				unmanaged = append(unmanaged, c)
+				continue
+			}
+			kept = append(kept, c)
+		}
+		plan.Changes = kept
+		plan.Unmanaged = unmanaged
+	}
+
+	// 15. Add live-only delete nodes to the graph for any deletes that remain
+	// in Changes (only populated when Prune=true). When Prune=false, this
+	// loop is a no-op because all deletes moved to Unmanaged in step 14.
 	for _, c := range plan.Changes {
 		if c.Type == ChangeDelete && !graph.HasNode(c.ID) {
 			graph.AddNode(c.ID)
@@ -153,9 +168,9 @@ func (e *Engine) plan(ctx context.Context, file *dcl.File, configs map[string]*p
 }
 
 // Plan runs the full planning pipeline and returns the plan and dependency
-// graph. It is a thin wrapper around the internal plan method.
-func (e *Engine) Plan(ctx context.Context, file *dcl.File, configs map[string]*provider.OrderedMap) (*Plan, *Graph, error) {
-	result, err := e.plan(ctx, file, configs)
+// graph. Pass PlanOptions{Prune: true} to include deletes in Plan.Changes.
+func (e *Engine) Plan(ctx context.Context, file *dcl.File, configs map[string]*provider.OrderedMap, opts PlanOptions) (*Plan, *Graph, error) {
+	result, err := e.plan(ctx, file, configs, opts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -163,38 +178,31 @@ func (e *Engine) Plan(ctx context.Context, file *dcl.File, configs map[string]*p
 }
 
 // Apply runs the full pipeline: plan → validate → order → execute.
-// The returned error covers pre-execution failures (plan, validate, cycle).
-// Per-resource execution failures live in ApplyResult.Results.
-func (e *Engine) Apply(ctx context.Context, file *dcl.File, configs map[string]*provider.OrderedMap) (*ApplyResult, error) {
-	result, err := e.plan(ctx, file, configs)
+// With PlanOptions{Prune: false} (default), deletes are skipped entirely.
+func (e *Engine) Apply(ctx context.Context, file *dcl.File, configs map[string]*provider.OrderedMap, opts PlanOptions) (*ApplyResult, error) {
+	result, err := e.plan(ctx, file, configs, opts)
 	if err != nil {
 		return nil, fmt.Errorf("plan: %w", err)
 	}
-
 	if err := validateResources(ctx, result.plan, result.providers); err != nil {
 		return nil, err
 	}
-
 	orderedPlan, err := OrderPlan(result.plan, result.graph)
 	if err != nil {
 		return nil, fmt.Errorf("order plan: %w", err)
 	}
-
 	return Execute(ctx, orderedPlan, result.graph, result.providers), nil
 }
 
-// DryRun runs the planning pipeline with validation but does not order or
-// execute. It catches configuration and validation problems without applying.
-func (e *Engine) DryRun(ctx context.Context, file *dcl.File, configs map[string]*provider.OrderedMap) (*Plan, error) {
-	result, err := e.plan(ctx, file, configs)
+// DryRun runs the planning pipeline with validation but does not execute.
+func (e *Engine) DryRun(ctx context.Context, file *dcl.File, configs map[string]*provider.OrderedMap, opts PlanOptions) (*Plan, error) {
+	result, err := e.plan(ctx, file, configs, opts)
 	if err != nil {
 		return nil, fmt.Errorf("plan: %w", err)
 	}
-
 	if err := validateResources(ctx, result.plan, result.providers); err != nil {
 		return nil, err
 	}
-
 	return result.plan, nil
 }
 

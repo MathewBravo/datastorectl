@@ -67,6 +67,16 @@ func TestPlan_HasChanges(t *testing.T) {
 			t.Fatal("expected changes when plan has a delete")
 		}
 	})
+
+	t.Run("excludes_unmanaged", func(t *testing.T) {
+		// Only unmanaged deletes → HasChanges must be false (drives exit code 0).
+		p := Plan{Unmanaged: []ResourceChange{
+			{ID: provider.ResourceID{Type: "t", Name: "x"}, Type: ChangeDelete},
+		}}
+		if p.HasChanges() {
+			t.Fatal("HasChanges() = true, want false (unmanaged shouldn't count)")
+		}
+	})
 }
 
 func TestPlan_Filters(t *testing.T) {
@@ -135,9 +145,50 @@ func TestPlan_Summary(t *testing.T) {
 
 	t.Run("no_changes", func(t *testing.T) {
 		p := Plan{}
-		want := "Plan: 0 to create, 0 to update, 0 to delete"
+		want := "Plan: 0 to create, 0 to update"
 		if got := p.Summary(); got != want {
 			t.Fatalf("expected %q, got %q", want, got)
+		}
+	})
+
+	t.Run("creates_and_updates_only", func(t *testing.T) {
+		p := Plan{Changes: []ResourceChange{
+			{ID: provider.ResourceID{Type: "t", Name: "a"}, Type: ChangeCreate},
+			{ID: provider.ResourceID{Type: "t", Name: "b"}, Type: ChangeCreate},
+			{ID: provider.ResourceID{Type: "t", Name: "c"}, Type: ChangeUpdate},
+		}}
+		want := "Plan: 2 to create, 1 to update"
+		if got := p.Summary(); got != want {
+			t.Fatalf("Summary() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("with_unmanaged", func(t *testing.T) {
+		p := Plan{
+			Changes: []ResourceChange{
+				{ID: provider.ResourceID{Type: "t", Name: "a"}, Type: ChangeCreate},
+			},
+			Unmanaged: []ResourceChange{
+				{ID: provider.ResourceID{Type: "t", Name: "x"}, Type: ChangeDelete},
+				{ID: provider.ResourceID{Type: "t", Name: "y"}, Type: ChangeDelete},
+			},
+		}
+		want := "Plan: 1 to create, 0 to update (2 unmanaged resources — use --prune to delete)"
+		if got := p.Summary(); got != want {
+			t.Fatalf("Summary() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("prune_mode", func(t *testing.T) {
+		// When Prune is on, deletes live inside Changes, not Unmanaged.
+		p := Plan{Changes: []ResourceChange{
+			{ID: provider.ResourceID{Type: "t", Name: "a"}, Type: ChangeCreate},
+			{ID: provider.ResourceID{Type: "t", Name: "x"}, Type: ChangeDelete},
+			{ID: provider.ResourceID{Type: "t", Name: "y"}, Type: ChangeDelete},
+		}}
+		want := "Plan: 1 to create, 0 to update, 2 to delete"
+		if got := p.Summary(); got != want {
+			t.Fatalf("Summary() = %q, want %q", got, want)
 		}
 	})
 }

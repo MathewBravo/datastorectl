@@ -10,8 +10,13 @@ import (
 // --- JSON plan ---
 
 type jsonPlan struct {
-	Changes []jsonChange `json:"changes"`
-	Summary string       `json:"summary"`
+	Changes   []jsonChange    `json:"changes"`
+	Unmanaged []jsonUnmanaged `json:"unmanaged,omitempty"`
+	Summary   string          `json:"summary"`
+}
+
+type jsonUnmanaged struct {
+	ID jsonResourceID `json:"id"`
 }
 
 type jsonChange struct {
@@ -71,6 +76,13 @@ func FormatPlanJSON(plan *engine.Plan) ([]byte, error) {
 		}
 
 		jp.Changes = append(jp.Changes, jc)
+	}
+
+	if len(plan.Unmanaged) > 0 {
+		jp.Unmanaged = make([]jsonUnmanaged, len(plan.Unmanaged))
+		for i, u := range plan.Unmanaged {
+			jp.Unmanaged[i] = jsonUnmanaged{ID: toJSONID(u.ID)}
+		}
 	}
 
 	return json.MarshalIndent(jp, "", "  ")
