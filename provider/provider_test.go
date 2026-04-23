@@ -1,8 +1,11 @@
 package provider
 
 import (
+	"context"
 	"fmt"
 	"testing"
+
+	"github.com/MathewBravo/datastorectl/dcl"
 )
 
 // Compile-time check that Operation implements fmt.Stringer.
@@ -49,6 +52,25 @@ func TestTypeOrdererOptional(t *testing.T) {
 	var plain Provider = stubProvider{}
 	if _, ok := plain.(TypeOrderer); ok {
 		t.Error("stubProvider should not satisfy TypeOrderer")
+	}
+}
+
+type stubGuarder struct{ stubProvider }
+
+func (stubGuarder) GuardDeletes(context.Context, []Resource) ([]DeleteGuard, dcl.Diagnostics) {
+	return nil, nil
+}
+
+var _ DeleteGuarder = stubGuarder{}
+
+func TestDeleteGuarderOptional(t *testing.T) {
+	var p Provider = stubGuarder{}
+	if _, ok := p.(DeleteGuarder); !ok {
+		t.Fatal("expected stubGuarder to satisfy DeleteGuarder")
+	}
+	var plain Provider = stubProvider{}
+	if _, ok := plain.(DeleteGuarder); ok {
+		t.Error("stubProvider should not satisfy DeleteGuarder")
 	}
 }
 

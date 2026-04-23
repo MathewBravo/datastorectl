@@ -48,6 +48,23 @@ type TypeOrdering struct {
 	After  string
 }
 
+// DeleteGuard is a provider-supplied annotation on a planned delete
+// that warrants a warning at plan time and a hard-stop at apply time.
+// The engine surfaces guards to the user; it does not interpret Reason.
+type DeleteGuard struct {
+	Resource ResourceID
+	Reason   string
+}
+
+// DeleteGuarder is an optional interface a Provider may implement to
+// flag planned deletes that are risky enough that the engine should
+// warn (at plan time) or refuse to execute (at apply time without
+// explicit opt-in). The engine calls GuardDeletes once per provider
+// after the plan is built.
+type DeleteGuarder interface {
+	GuardDeletes(ctx context.Context, deletes []Resource) ([]DeleteGuard, dcl.Diagnostics)
+}
+
 // TypeOrderer is an optional interface a Provider may implement to
 // declare default type-level orderings. The engine collects these
 // during provider configuration and feeds them into the dependency graph.
