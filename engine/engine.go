@@ -79,7 +79,9 @@ func (e *Engine) plan(ctx context.Context, file *dcl.File, configs map[string]*p
 		return nil, fmt.Errorf("discover: %w", err)
 	}
 
-	// 6b. Scope live resources to declared types.
+	// 6b. Scope live resources to declared types. This prevents the engine
+	// from planning deletes for resource types the user didn't declare
+	// (e.g., built-in OpenSearch users).
 	desiredTypes := make(map[string]struct{}, len(desired))
 	for _, r := range desired {
 		desiredTypes[r.ID.Type] = struct{}{}
@@ -153,7 +155,9 @@ func (e *Engine) plan(ctx context.Context, file *dcl.File, configs map[string]*p
 		plan.Unmanaged = unmanaged
 	}
 
-	// 15. Add live-only delete nodes to the graph when they'll execute.
+	// 15. Add live-only delete nodes to the graph for any deletes that remain
+	// in Changes (only populated when Prune=true). When Prune=false, this
+	// loop is a no-op because all deletes moved to Unmanaged in step 14.
 	for _, c := range plan.Changes {
 		if c.Type == ChangeDelete && !graph.HasNode(c.ID) {
 			graph.AddNode(c.ID)

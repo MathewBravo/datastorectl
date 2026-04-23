@@ -531,6 +531,77 @@ func TestEnginePlan(t *testing.T) {
 			t.Error("context not propagated to Normalize")
 		}
 	})
+
+	t.Run("additive_default_suppresses_deletes", func(t *testing.T) {
+		// Live has an orphan resource not in the DCL. With Prune off (default),
+		// it must appear in Unmanaged, not Changes.
+		mock := &mockEngineProvider{
+			discoverFn: func(context.Context) ([]provider.Resource, dcl.Diagnostics) {
+				return []provider.Resource{
+					{ID: rid("prune1_svc", "orphan"), Body: provider.NewOrderedMap()},
+					{ID: rid("prune1_svc", "keeper"), Body: provider.NewOrderedMap()},
+				}, nil
+			},
+		}
+		provider.Register("prune1", func() provider.Provider { return mock })
+
+		file := makeFile(provider.ResourceID{Type: "prune1_svc", Name: "keeper"})
+
+		e := &Engine{SecretResolver: stubSecretResolver{}}
+		plan, _, err := e.Plan(context.Background(), file, nil, PlanOptions{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(plan.Deletes()) != 0 {
+			t.Errorf("expected 0 deletes in Changes, got %d", len(plan.Deletes()))
+		}
+		if len(plan.Unmanaged) != 1 {
+			t.Fatalf("expected 1 unmanaged, got %d", len(plan.Unmanaged))
+		}
+		if plan.Unmanaged[0].ID.Name != "orphan" {
+			t.Errorf("Unmanaged[0].ID.Name = %q, want %q", plan.Unmanaged[0].ID.Name, "orphan")
+		}
+		if plan.HasChanges() {
+			t.Error("HasChanges() = true, want false (orphan is suppressed)")
+		}
+	})
+
+	t.Run("prune_mode_includes_deletes", func(t *testing.T) {
+		// Live has keeper (matching desired, → no-op) and orphan (live-only, → delete).
+		// With Prune=true only the delete appears in Changes; no-ops are separate.
+		// We want exactly 1 change (the delete), so keeper must match desired exactly.
+		mock := &mockEngineProvider{
+			discoverFn: func(context.Context) ([]provider.Resource, dcl.Diagnostics) {
+				return []provider.Resource{
+					{ID: rid("prune2_svc", "orphan"), Body: provider.NewOrderedMap()},
+					{ID: rid("prune2_svc", "keeper"), Body: provider.NewOrderedMap()},
+				}, nil
+			},
+		}
+		provider.Register("prune2", func() provider.Provider { return mock })
+
+		file := makeFile(provider.ResourceID{Type: "prune2_svc", Name: "keeper"})
+
+		e := &Engine{SecretResolver: stubSecretResolver{}}
+		plan, _, err := e.Plan(context.Background(), file, nil, PlanOptions{Prune: true})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(plan.Deletes()) != 1 {
+			t.Fatalf("expected 1 delete in Changes, got %d", len(plan.Deletes()))
+		}
+		// Keeper is a no-op (1) + orphan is a delete (1) = 2 total changes.
+		// Guard that no accidental creates or updates leaked into the plan.
+		if len(plan.Changes) != 2 {
+			t.Errorf("expected exactly 2 changes (1 no-op + 1 delete), got %d", len(plan.Changes))
+		}
+		if len(plan.Unmanaged) != 0 {
+			t.Errorf("expected empty Unmanaged with Prune=true, got %d", len(plan.Unmanaged))
+		}
+		if !plan.HasChanges() {
+			t.Error("HasChanges() = false, want true")
+		}
+	})
 }
 
 // errTestFail is a sentinel error for test assertions.
@@ -985,64 +1056,3 @@ func TestEnginePlan_TypeOrderings(t *testing.T) {
 	})
 }
 
-func TestEnginePlan_AdditiveDefault_SuppressesDeletes(t *testing.T) {
-	// Live has an orphan resource not in the DCL. With Prune off (default),
-	// it must appear in Unmanaged, not Changes.
-	mock := &mockEngineProvider{
-		discoverFn: func(context.Context) ([]provider.Resource, dcl.Diagnostics) {
-			return []provider.Resource{
-				{ID: rid("prune1_svc", "orphan"), Body: provider.NewOrderedMap()},
-				{ID: rid("prune1_svc", "keeper"), Body: provider.NewOrderedMap()},
-			}, nil
-		},
-	}
-	provider.Register("prune1", func() provider.Provider { return mock })
-
-	file := makeFile(provider.ResourceID{Type: "prune1_svc", Name: "keeper"})
-
-	e := &Engine{SecretResolver: stubSecretResolver{}}
-	plan, _, err := e.Plan(context.Background(), file, nil, PlanOptions{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(plan.Deletes()) != 0 {
-		t.Errorf("expected 0 deletes in Changes, got %d", len(plan.Deletes()))
-	}
-	if len(plan.Unmanaged) != 1 {
-		t.Fatalf("expected 1 unmanaged, got %d", len(plan.Unmanaged))
-	}
-	if plan.Unmanaged[0].ID.Name != "orphan" {
-		t.Errorf("Unmanaged[0].ID.Name = %q, want %q", plan.Unmanaged[0].ID.Name, "orphan")
-	}
-	if plan.HasChanges() {
-		t.Error("HasChanges() = true, want false (orphan is suppressed)")
-	}
-}
-
-func TestEnginePlan_PruneMode_IncludesDeletes(t *testing.T) {
-	mock := &mockEngineProvider{
-		discoverFn: func(context.Context) ([]provider.Resource, dcl.Diagnostics) {
-			return []provider.Resource{
-				{ID: rid("prune2_svc", "orphan"), Body: provider.NewOrderedMap()},
-			}, nil
-		},
-	}
-	provider.Register("prune2", func() provider.Provider { return mock })
-
-	file := makeFile(provider.ResourceID{Type: "prune2_svc", Name: "keeper"})
-
-	e := &Engine{SecretResolver: stubSecretResolver{}}
-	plan, _, err := e.Plan(context.Background(), file, nil, PlanOptions{Prune: true})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(plan.Deletes()) != 1 {
-		t.Fatalf("expected 1 delete in Changes, got %d", len(plan.Deletes()))
-	}
-	if len(plan.Unmanaged) != 0 {
-		t.Errorf("expected empty Unmanaged with Prune=true, got %d", len(plan.Unmanaged))
-	}
-	if !plan.HasChanges() {
-		t.Error("HasChanges() = false, want true")
-	}
-}
