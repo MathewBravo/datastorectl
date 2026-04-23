@@ -29,6 +29,7 @@ func init() {
 // Provider implements provider.Provider for OpenSearch clusters.
 type Provider struct {
 	client   *Client
+	caller   callerIdentity
 	handlers map[string]resourceHandler
 }
 
@@ -65,7 +66,7 @@ func (p *Provider) Configure(ctx context.Context, config *provider.OrderedMap) d
 
 	switch auth {
 	case "basic":
-		return p.configureBasicAuth(endpoint, config)
+		return p.configureBasicAuth(ctx, endpoint, config)
 	case "sigv4":
 		return p.configureSigV4(ctx, endpoint, config)
 	default:
@@ -86,7 +87,7 @@ func tlsSkipVerify(config *provider.OrderedMap) bool {
 }
 
 // configureBasicAuth validates username/password and creates a basic-auth client.
-func (p *Provider) configureBasicAuth(endpoint string, config *provider.OrderedMap) dcl.Diagnostics {
+func (p *Provider) configureBasicAuth(ctx context.Context, endpoint string, config *provider.OrderedMap) dcl.Diagnostics {
 	usernameVal, ok := config.Get("username")
 	if !ok || usernameVal.Kind != provider.KindString || usernameVal.Str == "" {
 		return dcl.Diagnostics{{
@@ -113,7 +114,7 @@ func (p *Provider) configureBasicAuth(endpoint string, config *provider.OrderedM
 		}}
 	}
 	p.client = client
-	return nil
+	return p.fetchAndCacheCallerIdentity(ctx)
 }
 
 // configureSigV4 validates the region field and creates a SigV4-signing client.
@@ -135,6 +136,22 @@ func (p *Provider) configureSigV4(ctx context.Context, endpoint string, config *
 		}}
 	}
 	p.client = client
+	return p.fetchAndCacheCallerIdentity(ctx)
+}
+
+// fetchAndCacheCallerIdentity hits /_plugins/_security/api/account and
+// caches the caller's user_name and backend_roles for self-lockout
+// protection. Called at the end of both auth paths.
+func (p *Provider) fetchAndCacheCallerIdentity(ctx context.Context) dcl.Diagnostics {
+	id, err := fetchCallerIdentity(ctx, p.client)
+	if err != nil {
+		return dcl.Diagnostics{{
+			Severity:   dcl.SeverityError,
+			Message:    fmt.Sprintf("opensearch: unable to fetch caller identity for self-lockout protection: %s", err),
+			Suggestion: "verify the credentials have access to /_plugins/_security/api/account",
+		}}
+	}
+	p.caller = id
 	return nil
 }
 
@@ -209,6 +226,33 @@ func (p *Provider) Schemas() map[string]provider.Schema {
 		}
 	}
 	return schemas
+}
+
+// GuardDeletes implements provider.DeleteGuarder. It flags any delete
+// that would lock out the authenticated caller — either a role_mapping
+// whose users/backend_roles cover the caller, or the caller's own
+// internal_user account.
+func (p *Provider) GuardDeletes(_ context.Context, deletes []provider.Resource) ([]provider.DeleteGuard, dcl.Diagnostics) {
+	var guards []provider.DeleteGuard
+	for _, r := range deletes {
+		switch r.ID.Type {
+		case "opensearch_role_mapping":
+			if classifyRoleMappingLockout(r, p.caller) {
+				guards = append(guards, provider.DeleteGuard{
+					Resource: r.ID,
+					Reason:   fmt.Sprintf("would revoke caller %q access (mapping grants privileges the caller currently uses)", p.caller.UserName),
+				})
+			}
+		case "opensearch_internal_user":
+			if classifyInternalUserLockout(r, p.caller) {
+				guards = append(guards, provider.DeleteGuard{
+					Resource: r.ID,
+					Reason:   fmt.Sprintf("would delete caller %q's own user account", p.caller.UserName),
+				})
+			}
+		}
+	}
+	return guards, nil
 }
 
 // TypeOrderings declares the default resource type ordering for the opensearch provider.
