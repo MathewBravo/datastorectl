@@ -172,3 +172,61 @@ func TestShouldColor_no_color_env(t *testing.T) {
 		t.Error("expected false when NO_COLOR is set")
 	}
 }
+
+func TestFormatPlan_marks_guarded_deletes(t *testing.T) {
+	plan := &engine.Plan{
+		Changes: []engine.ResourceChange{{
+			ID:   rid("opensearch_role_mapping", "all_access"),
+			Type: engine.ChangeDelete,
+			Live: &provider.Resource{ID: rid("opensearch_role_mapping", "all_access")},
+		}},
+		Guards: []engine.Guard{{
+			Resource: rid("opensearch_role_mapping", "all_access"),
+			Reason:   `would revoke caller "admin" access`,
+		}},
+	}
+
+	out := FormatPlan(plan, false)
+	if !strings.Contains(out, "(would lock out caller)") {
+		t.Errorf("output missing lockout marker: %s", out)
+	}
+	if !strings.Contains(out, `would revoke caller "admin" access`) {
+		t.Errorf("output missing guard reason: %s", out)
+	}
+}
+
+func TestFormatPlan_unguarded_delete_has_no_marker(t *testing.T) {
+	plan := &engine.Plan{
+		Changes: []engine.ResourceChange{{
+			ID:   rid("svc", "deleteme"),
+			Type: engine.ChangeDelete,
+			Live: &provider.Resource{ID: rid("svc", "deleteme")},
+		}},
+	}
+
+	out := FormatPlan(plan, false)
+	if strings.Contains(out, "(would lock out caller)") {
+		t.Errorf("unguarded delete should not have lockout marker: %s", out)
+	}
+}
+
+func TestFormatPlanVerbose_marks_guarded_deletes(t *testing.T) {
+	plan := &engine.Plan{
+		Changes: []engine.ResourceChange{{
+			ID:   rid("opensearch_internal_user", "admin"),
+			Type: engine.ChangeDelete,
+			Live: &provider.Resource{ID: rid("opensearch_internal_user", "admin"), Body: provider.NewOrderedMap()},
+		}},
+		Guards: []engine.Guard{{
+			Resource: rid("opensearch_internal_user", "admin"),
+			Reason:   "would delete caller's own account",
+		}},
+	}
+	out := FormatPlanVerbose(plan, false)
+	if !strings.Contains(out, "(would lock out caller)") {
+		t.Errorf("verbose output missing lockout marker: %s", out)
+	}
+	if !strings.Contains(out, "would delete caller's own account") {
+		t.Errorf("verbose output missing guard reason: %s", out)
+	}
+}

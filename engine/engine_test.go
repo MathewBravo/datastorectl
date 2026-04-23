@@ -1056,3 +1056,134 @@ func TestEnginePlan_TypeOrderings(t *testing.T) {
 	})
 }
 
+
+// guardingEngineProvider is a mockEngineProvider that also implements
+// provider.DeleteGuarder, returning a preconfigured guard list.
+type guardingEngineProvider struct {
+	mockEngineProvider
+	guards []provider.DeleteGuard
+}
+
+func (g *guardingEngineProvider) GuardDeletes(context.Context, []provider.Resource) ([]provider.DeleteGuard, dcl.Diagnostics) {
+	return g.guards, nil
+}
+
+func TestEngine_plan_attaches_guards_from_DeleteGuarder(t *testing.T) {
+	liveOnly := provider.Resource{
+		ID: provider.ResourceID{Type: "engguard_role", Name: "victim"},
+	}
+	mock := &guardingEngineProvider{
+		mockEngineProvider: mockEngineProvider{
+			discoverFn: func(context.Context) ([]provider.Resource, dcl.Diagnostics) {
+				return []provider.Resource{liveOnly}, nil
+			},
+		},
+		guards: []provider.DeleteGuard{
+			{Resource: liveOnly.ID, Reason: "would lock out caller"},
+		},
+	}
+	provider.Register("engguard", func() provider.Provider { return mock })
+
+	// Desired has a resource of the same type as the live-only one so
+	// engine scoping keeps the live resource and plans a delete for it.
+	file := makeFile(provider.ResourceID{Type: "engguard_role", Name: "keeper"})
+
+	e := &Engine{SecretResolver: stubSecretResolver{}}
+	plan, _, err := e.Plan(context.Background(), file, nil, PlanOptions{Prune: true})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+
+	if len(plan.Guards) != 1 {
+		t.Fatalf("got %d guards, want 1 (plan=%+v)", len(plan.Guards), plan)
+	}
+	if plan.Guards[0].Reason != "would lock out caller" {
+		t.Errorf("Guards[0].Reason = %q, want %q", plan.Guards[0].Reason, "would lock out caller")
+	}
+	if plan.Guards[0].Resource != liveOnly.ID {
+		t.Errorf("Guards[0].Resource = %v, want %v", plan.Guards[0].Resource, liveOnly.ID)
+	}
+}
+
+func TestEngine_plan_no_guards_when_provider_does_not_implement_DeleteGuarder(t *testing.T) {
+	liveOnly := provider.Resource{
+		ID: provider.ResourceID{Type: "engnoguard_role", Name: "victim"},
+	}
+	mock := &mockEngineProvider{
+		discoverFn: func(context.Context) ([]provider.Resource, dcl.Diagnostics) {
+			return []provider.Resource{liveOnly}, nil
+		},
+	}
+	provider.Register("engnoguard", func() provider.Provider { return mock })
+
+	file := makeFile(provider.ResourceID{Type: "engnoguard_role", Name: "keeper"})
+
+	e := &Engine{SecretResolver: stubSecretResolver{}}
+	plan, _, err := e.Plan(context.Background(), file, nil, PlanOptions{Prune: true})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+
+	if len(plan.Guards) != 0 {
+		t.Errorf("expected no guards, got %d", len(plan.Guards))
+	}
+}
+
+func TestEngine_Apply_refuses_when_guards_present(t *testing.T) {
+	liveOnly := provider.Resource{
+		ID: provider.ResourceID{Type: "engapplyguard_role", Name: "victim"},
+	}
+	mock := &guardingEngineProvider{
+		mockEngineProvider: mockEngineProvider{
+			discoverFn: func(context.Context) ([]provider.Resource, dcl.Diagnostics) {
+				return []provider.Resource{liveOnly}, nil
+			},
+		},
+		guards: []provider.DeleteGuard{
+			{Resource: liveOnly.ID, Reason: "would revoke caller access"},
+		},
+	}
+	provider.Register("engapplyguard", func() provider.Provider { return mock })
+
+	file := makeFile(provider.ResourceID{Type: "engapplyguard_role", Name: "keeper"})
+	e := &Engine{SecretResolver: stubSecretResolver{}}
+
+	_, err := e.Apply(context.Background(), file, nil, PlanOptions{Prune: true})
+	if err == nil {
+		t.Fatal("Apply should refuse when guards are present and AllowSelfLockout is false")
+	}
+	if !strings.Contains(err.Error(), "refusing to apply") {
+		t.Errorf("error should mention refusal, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "allow-self-lockout") {
+		t.Errorf("error should mention override flag, got: %v", err)
+	}
+}
+
+func TestEngine_Apply_proceeds_when_AllowSelfLockout_set(t *testing.T) {
+	liveOnly := provider.Resource{
+		ID: provider.ResourceID{Type: "engapplyallow_role", Name: "victim"},
+	}
+	mock := &guardingEngineProvider{
+		mockEngineProvider: mockEngineProvider{
+			discoverFn: func(context.Context) ([]provider.Resource, dcl.Diagnostics) {
+				return []provider.Resource{liveOnly}, nil
+			},
+		},
+		guards: []provider.DeleteGuard{
+			{Resource: liveOnly.ID, Reason: "would revoke caller access"},
+		},
+	}
+	provider.Register("engapplyallow", func() provider.Provider { return mock })
+
+	file := makeFile(provider.ResourceID{Type: "engapplyallow_role", Name: "keeper"})
+	e := &Engine{SecretResolver: stubSecretResolver{}}
+
+	result, err := e.Apply(context.Background(), file, nil, PlanOptions{Prune: true, AllowSelfLockout: true})
+	if err != nil {
+		t.Fatalf("Apply should proceed when AllowSelfLockout is true: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected ApplyResult")
+	}
+}

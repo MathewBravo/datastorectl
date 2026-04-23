@@ -5,12 +5,14 @@ import (
 	"strings"
 
 	"github.com/MathewBravo/datastorectl/engine"
+	"github.com/MathewBravo/datastorectl/provider"
 )
 
 // FormatPlan renders a plan as human-readable Terraform-style text.
 // When color is true, ANSI codes highlight creates (green), updates (yellow),
 // and deletes (red). No-op changes are omitted.
 func FormatPlan(plan *engine.Plan, color bool) string {
+	guards := guardMap(plan.Guards)
 	var blocks []string
 	for _, c := range plan.Changes {
 		switch c.Type {
@@ -19,7 +21,7 @@ func FormatPlan(plan *engine.Plan, color bool) string {
 		case engine.ChangeUpdate:
 			blocks = append(blocks, formatUpdate(c, color))
 		case engine.ChangeDelete:
-			blocks = append(blocks, formatDelete(c, color))
+			blocks = append(blocks, formatDelete(c, guards[c.ID], color))
 		}
 	}
 	if len(blocks) == 0 && len(plan.Unmanaged) == 0 {
@@ -31,6 +33,16 @@ func FormatPlan(plan *engine.Plan, color bool) string {
 		return summary + "\n"
 	}
 	return strings.Join(blocks, "\n\n") + "\n\n" + summary + "\n"
+}
+
+// guardMap indexes guards by their resource ID for O(1) lookup during
+// delete-line rendering.
+func guardMap(gs []engine.Guard) map[provider.ResourceID]engine.Guard {
+	out := make(map[provider.ResourceID]engine.Guard, len(gs))
+	for _, g := range gs {
+		out[g.Resource] = g
+	}
+	return out
 }
 
 func formatCreate(c engine.ResourceChange, color bool) string {
@@ -58,9 +70,16 @@ func formatUpdate(c engine.ResourceChange, color bool) string {
 	return b.String()
 }
 
-func formatDelete(c engine.ResourceChange, color bool) string {
+func formatDelete(c engine.ResourceChange, guard engine.Guard, color bool) string {
 	header := fmt.Sprintf("- %s (delete)", c.ID)
-	return red(header, color)
+	if guard.Reason != "" {
+		header += "  (would lock out caller)"
+	}
+	out := red(header, color)
+	if guard.Reason != "" {
+		out += "\n    ! " + guard.Reason
+	}
+	return out
 }
 
 func formatDiffValue(d engine.ValueDiff, color bool) string {

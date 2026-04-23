@@ -27,6 +27,7 @@ Exit codes: 0 = all changes succeeded, 1 = one or more changes failed.`,
 func init() {
 	applyCmd.Flags().Bool("dry-run", false, "validate the full pipeline without applying changes")
 	applyCmd.Flags().Bool("prune", false, "include delete changes (default: additive-only)")
+	applyCmd.Flags().Bool("allow-self-lockout", false, "allow executing deletes that would revoke the authenticated caller's own access")
 	rootCmd.AddCommand(applyCmd)
 }
 
@@ -37,6 +38,7 @@ func runApply(cmd *cobra.Command, args []string) error {
 	verbose := isVerbose(cmd)
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	prune, _ := cmd.Flags().GetBool("prune")
+	allowLockout, _ := cmd.Flags().GetBool("allow-self-lockout")
 	ctx := context.Background()
 
 	// 1. Load DCL.
@@ -120,7 +122,7 @@ func runApply(cmd *cobra.Command, args []string) error {
 	}
 
 	// 5. Full apply path.
-	result, err := eng.Apply(ctx, file, nil, engine.PlanOptions{Prune: prune})
+	result, err := eng.Apply(ctx, file, nil, engine.PlanOptions{Prune: prune, AllowSelfLockout: allowLockout})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return errExit{code: 1}

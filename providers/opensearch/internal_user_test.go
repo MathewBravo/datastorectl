@@ -384,3 +384,29 @@ func TestInternalUserHandler_Integration(t *testing.T) {
 		}
 	})
 }
+
+func TestInternalUserClassifyLockout(t *testing.T) {
+	caller := callerIdentity{UserName: "admin", BackendRoles: []string{"admin"}}
+
+	tests := []struct {
+		name    string
+		resName string
+		want    bool
+	}{
+		{"caller_self_delete", "admin", true},
+		{"other_user_delete", "kibanaro", false},
+		{"empty_name", "", false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := provider.Resource{
+				ID: provider.ResourceID{Type: "opensearch_internal_user", Name: tc.resName},
+			}
+			got := classifyInternalUserLockout(r, caller)
+			if got != tc.want {
+				t.Errorf("classifyInternalUserLockout = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

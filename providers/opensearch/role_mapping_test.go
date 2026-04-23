@@ -355,3 +355,61 @@ func TestRoleMappingHandler_Integration(t *testing.T) {
 		}
 	})
 }
+
+func TestRoleMappingClassifyLockout(t *testing.T) {
+	caller := callerIdentity{UserName: "admin", BackendRoles: []string{"admin", "ops"}}
+
+	tests := []struct {
+		name string
+		body *provider.OrderedMap
+		want bool
+	}{
+		{
+			name: "backend_roles_intersection",
+			body: buildMap(
+				"backend_roles", provider.ListVal([]provider.Value{provider.StringVal("admin")}),
+			),
+			want: true,
+		},
+		{
+			name: "users_contains_caller",
+			body: buildMap(
+				"users", provider.ListVal([]provider.Value{provider.StringVal("admin")}),
+			),
+			want: true,
+		},
+		{
+			name: "users_wildcard",
+			body: buildMap(
+				"users", provider.ListVal([]provider.Value{provider.StringVal("*")}),
+			),
+			want: true,
+		},
+		{
+			name: "no_overlap",
+			body: buildMap(
+				"backend_roles", provider.ListVal([]provider.Value{provider.StringVal("readall")}),
+				"users", provider.ListVal([]provider.Value{provider.StringVal("someone_else")}),
+			),
+			want: false,
+		},
+		{
+			name: "empty_body",
+			body: buildMap(),
+			want: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := provider.Resource{
+				ID:   provider.ResourceID{Type: "opensearch_role_mapping", Name: "test"},
+				Body: tc.body,
+			}
+			got := classifyRoleMappingLockout(r, caller)
+			if got != tc.want {
+				t.Errorf("classifyRoleMappingLockout = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
