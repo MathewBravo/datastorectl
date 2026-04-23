@@ -122,7 +122,7 @@ func TestFormatPlan_includes_summary(t *testing.T) {
 	}
 }
 
-func TestFormatPlan_UnmanagedOnly(t *testing.T) {
+func TestFormatPlan_unmanaged_only(t *testing.T) {
 	plan := &engine.Plan{
 		Unmanaged: []engine.ResourceChange{
 			{ID: provider.ResourceID{Type: "t", Name: "x"}, Type: engine.ChangeDelete},
@@ -134,7 +134,7 @@ func TestFormatPlan_UnmanagedOnly(t *testing.T) {
 	if !strings.Contains(got, "2 unmanaged resources") {
 		t.Errorf("FormatPlan missing unmanaged count: %q", got)
 	}
-	if strings.Contains(got, "- ") {
+	if strings.Contains(got, "(delete)") {
 		t.Errorf("FormatPlan listed deletes per-resource when it shouldn't: %q", got)
 	}
 	if got == "No changes." {
@@ -142,7 +142,7 @@ func TestFormatPlan_UnmanagedOnly(t *testing.T) {
 	}
 }
 
-func TestFormatPlan_CreatesWithUnmanaged(t *testing.T) {
+func TestFormatPlan_creates_with_unmanaged(t *testing.T) {
 	desired := provider.NewOrderedMap()
 	desired.Set("name", provider.StringVal("hello"))
 	plan := &engine.Plan{
