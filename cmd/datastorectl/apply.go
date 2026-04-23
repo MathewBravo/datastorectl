@@ -26,6 +26,7 @@ Exit codes: 0 = all changes succeeded, 1 = one or more changes failed.`,
 
 func init() {
 	applyCmd.Flags().Bool("dry-run", false, "validate the full pipeline without applying changes")
+	applyCmd.Flags().Bool("prune", false, "include delete changes (default: additive-only)")
 	rootCmd.AddCommand(applyCmd)
 }
 
@@ -35,6 +36,7 @@ func runApply(cmd *cobra.Command, args []string) error {
 	format := outputFormat(cmd)
 	verbose := isVerbose(cmd)
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	prune, _ := cmd.Flags().GetBool("prune")
 	ctx := context.Background()
 
 	// 1. Load DCL.
@@ -87,7 +89,7 @@ func runApply(cmd *cobra.Command, args []string) error {
 
 	// 4. Dry run path.
 	if dryRun {
-		plan, err := eng.DryRun(ctx, file, nil, engine.PlanOptions{})
+		plan, err := eng.DryRun(ctx, file, nil, engine.PlanOptions{Prune: prune})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return errExit{code: 1}
@@ -118,7 +120,7 @@ func runApply(cmd *cobra.Command, args []string) error {
 	}
 
 	// 5. Full apply path.
-	result, err := eng.Apply(ctx, file, nil, engine.PlanOptions{})
+	result, err := eng.Apply(ctx, file, nil, engine.PlanOptions{Prune: prune})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return errExit{code: 1}
