@@ -71,14 +71,20 @@ func (p Plan) HasChanges() bool {
 }
 
 // Creates returns all changes with type ChangeCreate.
-func (p Plan) Creates() []ResourceChange { return p.filterByType(ChangeCreate) }
+func (p Plan) Creates() []ResourceChange {
+	return p.filterByType(ChangeCreate)
+}
 
 // Updates returns all changes with type ChangeUpdate.
-func (p Plan) Updates() []ResourceChange { return p.filterByType(ChangeUpdate) }
+func (p Plan) Updates() []ResourceChange {
+	return p.filterByType(ChangeUpdate)
+}
 
 // Deletes returns delete changes from Plan.Changes. This is only populated
 // when PlanOptions.Prune was true; otherwise deletes live in Plan.Unmanaged.
-func (p Plan) Deletes() []ResourceChange { return p.filterByType(ChangeDelete) }
+func (p Plan) Deletes() []ResourceChange {
+	return p.filterByType(ChangeDelete)
+}
 
 func (p Plan) filterByType(t ChangeType) []ResourceChange {
 	var out []ResourceChange
@@ -90,9 +96,10 @@ func (p Plan) filterByType(t ChangeType) []ResourceChange {
 	return out
 }
 
-// Summary returns a human-readable summary of the plan. Format depends on
-// whether pruning is active (indicated by the presence of delete changes
-// in Plan.Changes vs Plan.Unmanaged):
+// Summary returns a human-readable summary of the plan.
+// Plan.Changes containing delete entries and Plan.Unmanaged being non-empty are mutually exclusive — the engine maintains this invariant.
+// Format depends on whether pruning is active (indicated by the presence of
+// delete changes in Plan.Changes vs Plan.Unmanaged):
 //   - additive mode, no unmanaged: "Plan: X to create, Y to update"
 //   - additive mode with unmanaged: "Plan: X to create, Y to update (N unmanaged resources — use --prune to delete)"
 //   - prune mode: "Plan: X to create, Y to update, Z to delete"
