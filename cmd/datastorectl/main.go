@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	// Register built-in providers.
+	_ "github.com/MathewBravo/datastorectl/providers/mysql"
 	_ "github.com/MathewBravo/datastorectl/providers/opensearch"
 )
 
