@@ -18,7 +18,7 @@ type composableIndexTemplateHandler struct{}
 func (h *composableIndexTemplateHandler) Schema() provider.Schema {
 	return provider.Schema{
 		Fields: map[string]provider.FieldHint{
-			"template": provider.FieldBlockMap,
+			"template": {Kind: provider.FieldBlockMap},
 		},
 	}
 }

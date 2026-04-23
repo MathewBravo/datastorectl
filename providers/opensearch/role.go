@@ -18,8 +18,8 @@ type roleHandler struct{}
 func (h *roleHandler) Schema() provider.Schema {
 	return provider.Schema{
 		Fields: map[string]provider.FieldHint{
-			"index_permissions":  provider.FieldBlockList,
-			"tenant_permissions": provider.FieldBlockList,
+			"index_permissions":  {Kind: provider.FieldBlockList},
+			"tenant_permissions": {Kind: provider.FieldBlockList},
 		},
 	}
 }
