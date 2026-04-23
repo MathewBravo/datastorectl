@@ -155,10 +155,7 @@ DCL layers 1 through 4: resource blocks with typed attributes, cross-resource re
 
 ## Roadmap
 
-- **v0.1.0**: OpenSearch provider, core framework, DCL parser.
-- **v0.2.0**: `import` command (generate DCL from live cluster state).
-- **v0.5.0**: Redis and MongoDB providers. DCL variables, conditionals, and iteration. CEL policy validation. Vault and AWS Secrets Manager backends.
-- **v1.0.0**: MySQL provider. gRPC external plugin protocol. Multi-environment overlays. GitOps integration (ArgoCD, Flux).
+TBD once v0.1.0 is out.
 
 ## Architecture
 
