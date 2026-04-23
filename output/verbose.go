@@ -23,10 +23,14 @@ func FormatPlanVerbose(plan *engine.Plan, color bool) string {
 			blocks = append(blocks, formatVerboseDelete(c, color))
 		}
 	}
-	if len(blocks) == 0 {
+	if len(blocks) == 0 && len(plan.Unmanaged) == 0 {
 		return "No changes."
 	}
-	return strings.Join(blocks, "\n\n") + "\n\n" + bold(plan.Summary(), color) + "\n"
+	summary := bold(plan.Summary(), color)
+	if len(blocks) == 0 {
+		return summary + "\n"
+	}
+	return strings.Join(blocks, "\n\n") + "\n\n" + summary + "\n"
 }
 
 func formatVerboseUpdate(c engine.ResourceChange, color bool) string {
