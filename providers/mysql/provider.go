@@ -8,6 +8,13 @@ import (
 	"github.com/MathewBravo/datastorectl/provider"
 )
 
+// validTLSModes lists the accepted values for the `tls` field.
+var validTLSModes = map[string]bool{
+	"required":    true,
+	"skip-verify": true,
+	"disabled":    true,
+}
+
 func init() {
 	provider.Register("mysql", func() provider.Provider {
 		return &Provider{
@@ -21,22 +28,157 @@ func init() {
 	})
 }
 
-// Provider implements provider.Provider for MySQL clusters. The Phase 18
-// scaffold wires registration, handler dispatch, and placeholder
-// diagnostics. Real configuration, discovery, and application land in
-// subsequent phases.
+// Provider implements provider.Provider for MySQL clusters.
 type Provider struct {
+	client   *Client
 	handlers map[string]resourceHandler
 }
 
-// Configure is not yet implemented. The scaffold returns a deterministic
-// diagnostic so integration code can detect the placeholder state
-// without crashing.
-func (p *Provider) Configure(_ context.Context, _ *provider.OrderedMap) dcl.Diagnostics {
-	return dcl.Diagnostics{{
-		Severity: dcl.SeverityError,
-		Message:  "mysql provider Configure is not implemented yet (Phase 18 scaffold)",
-	}}
+// Configure validates the provider block and opens the underlying
+// *sql.DB connection. Supported auth modes are "password" (Phase 18)
+// and "rds_iam" (Phase 24). The connection pool is sized at one.
+func (p *Provider) Configure(ctx context.Context, config *provider.OrderedMap) dcl.Diagnostics {
+	if config == nil {
+		return dcl.Diagnostics{{
+			Severity: dcl.SeverityError,
+			Message:  `mysql provider requires configuration — set at minimum "endpoint", "auth", and the credentials for your chosen auth method`,
+		}}
+	}
+
+	endpoint, diags := requireStringField(config, "endpoint",
+		`"endpoint" is required and must be a non-empty string (e.g. "mysql.example.com:3306")`,
+		`add endpoint = "your-mysql-host:3306" to the mysql provider block`)
+	if diags.HasErrors() {
+		return diags
+	}
+
+	auth, diags := requireStringField(config, "auth",
+		`"auth" is required — set it to "password" for username/password or "rds_iam" for AWS RDS IAM authentication`,
+		`add auth = "password" or auth = "rds_iam" to the mysql provider block`)
+	if diags.HasErrors() {
+		return diags
+	}
+
+	tlsMode, diags := resolveTLSField(config)
+	if diags.HasErrors() {
+		return diags
+	}
+
+	switch auth {
+	case "password":
+		return p.configurePasswordAuth(ctx, endpoint, tlsMode, config)
+	case "rds_iam":
+		return dcl.Diagnostics{{
+			Severity:   dcl.SeverityError,
+			Message:    `auth = "rds_iam" is not implemented yet`,
+			Suggestion: `use auth = "password" until Phase 24 lands RDS IAM support`,
+		}}
+	default:
+		return dcl.Diagnostics{{
+			Severity: dcl.SeverityError,
+			Message:  fmt.Sprintf(`auth must be "password" or "rds_iam", got %q`, auth),
+		}}
+	}
+}
+
+// configurePasswordAuth validates the password-auth required fields,
+// constructs the client, and runs a sanity ping to confirm the
+// connection is live.
+func (p *Provider) configurePasswordAuth(ctx context.Context, endpoint, tlsMode string, config *provider.OrderedMap) dcl.Diagnostics {
+	username, diags := requireStringField(config, "username",
+		`"username" is required when auth is "password"`,
+		`add username = "datastorectl" to the mysql provider block`)
+	if diags.HasErrors() {
+		return diags
+	}
+
+	password, diags := requireStringField(config, "password",
+		`"password" is required when auth is "password"`,
+		`add password = secret("env", "MYSQL_PASSWORD") to the mysql provider block`)
+	if diags.HasErrors() {
+		return diags
+	}
+
+	cfg := ClientConfig{
+		Endpoint: endpoint,
+		Username: username,
+		Password: password,
+		TLS:      tlsMode,
+		TLSCA:    optionalString(config, "tls_ca"),
+		TLSCert:  optionalString(config, "tls_cert"),
+		TLSKey:   optionalString(config, "tls_key"),
+	}
+
+	client, err := NewPasswordClient(cfg)
+	if err != nil {
+		return dcl.Diagnostics{{
+			Severity: dcl.SeverityError,
+			Message:  fmt.Sprintf("failed to create mysql client: %s", err),
+		}}
+	}
+
+	if err := client.DB().PingContext(ctx); err != nil {
+		_ = client.Close()
+		return dcl.Diagnostics{{
+			Severity:   dcl.SeverityError,
+			Message:    fmt.Sprintf("mysql connection check failed: %s", err),
+			Suggestion: "verify the endpoint is reachable, credentials are correct, and TLS settings match the server",
+		}}
+	}
+
+	p.client = client
+	return nil
+}
+
+// requireStringField fetches a required string field, producing a
+// standard diagnostic when missing or empty.
+func requireStringField(config *provider.OrderedMap, name, message, suggestion string) (string, dcl.Diagnostics) {
+	v, ok := config.Get(name)
+	if !ok || v.Kind != provider.KindString || v.Str == "" {
+		return "", dcl.Diagnostics{{
+			Severity:   dcl.SeverityError,
+			Message:    message,
+			Suggestion: suggestion,
+		}}
+	}
+	return v.Str, nil
+}
+
+// optionalString returns the string value of a field if it exists and
+// is a non-empty string, otherwise "".
+func optionalString(config *provider.OrderedMap, name string) string {
+	v, ok := config.Get(name)
+	if !ok || v.Kind != provider.KindString {
+		return ""
+	}
+	return v.Str
+}
+
+// resolveTLSField parses the optional `tls` enum, defaulting to
+// "required" when absent.
+func resolveTLSField(config *provider.OrderedMap) (string, dcl.Diagnostics) {
+	v, ok := config.Get("tls")
+	if !ok {
+		return "required", nil
+	}
+	if v.Kind != provider.KindString {
+		return "", dcl.Diagnostics{{
+			Severity: dcl.SeverityError,
+			Message:  `"tls" must be a string`,
+		}}
+	}
+	mode := v.Str
+	if mode == "" {
+		return "required", nil
+	}
+	if !validTLSModes[mode] {
+		return "", dcl.Diagnostics{{
+			Severity:   dcl.SeverityError,
+			Message:    fmt.Sprintf(`"tls" must be "required", "skip-verify", or "disabled", got %q`, mode),
+			Suggestion: `use tls = "required" to verify the server certificate (default), "skip-verify" to connect without verification, or "disabled" to connect in plaintext`,
+		}}
+	}
+	return mode, nil
 }
 
 // Discover iterates registered handlers and collects any discovered

@@ -21,21 +21,6 @@ func TestProviderRegistered(t *testing.T) {
 	}
 }
 
-// TestConfigureReturnsNotImplemented asserts the scaffold's Configure
-// returns a deterministic "not implemented" diagnostic so callers get
-// a clear signal that the provider is a placeholder.
-func TestConfigureReturnsNotImplemented(t *testing.T) {
-	f, _ := provider.Lookup("mysql")
-	p := f()
-	diags := p.Configure(context.Background(), nil)
-	if !diags.HasErrors() {
-		t.Fatal("expected Configure to return an error diagnostic, got none")
-	}
-	if !strings.Contains(strings.ToLower(diags[0].Message), "not implemented") {
-		t.Errorf("expected diagnostic to mention 'not implemented', got: %q", diags[0].Message)
-	}
-}
-
 // TestHandlersRegisteredForAllResourceTypes probes the handlers map via
 // Validate — a registered type returns a handler-level error (scaffold
 // stub), an unregistered type returns the central "is not supported"
