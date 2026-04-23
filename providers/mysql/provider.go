@@ -15,6 +15,21 @@ var validTLSModes = map[string]bool{
 	"disabled":    true,
 }
 
+// supportedVersions lists the MySQL major.minor targets this release
+// accepts. Additive extension: new versions land here as minor changes
+// alongside any new version-gated schema fields.
+var supportedVersions = map[string]bool{
+	"8.0": true,
+	"8.4": true,
+}
+
+// deferredVersions maps known-but-not-yet-supported MySQL versions to
+// tracking info so the rejection diagnostic points users at the right
+// place to follow along.
+var deferredVersions = map[string]string{
+	"5.7": `MySQL 5.7 support is tracked as a post-v0.1.0 addition`,
+}
+
 func init() {
 	provider.Register("mysql", func() provider.Provider {
 		return &Provider{
@@ -31,7 +46,14 @@ func init() {
 // Provider implements provider.Provider for MySQL clusters.
 type Provider struct {
 	client   *Client
+	version  string // declared major.minor target ("8.0" | "8.4")
 	handlers map[string]resourceHandler
+}
+
+// Version returns the declared target MySQL version the provider was
+// configured against. Empty before Configure runs.
+func (p *Provider) Version() string {
+	return p.version
 }
 
 // Configure validates the provider block and opens the underlying
@@ -63,6 +85,12 @@ func (p *Provider) Configure(ctx context.Context, config *provider.OrderedMap) d
 	if diags.HasErrors() {
 		return diags
 	}
+
+	version, diags := resolveVersionField(config)
+	if diags.HasErrors() {
+		return diags
+	}
+	p.version = version
 
 	switch auth {
 	case "password":
@@ -127,7 +155,74 @@ func (p *Provider) configurePasswordAuth(ctx context.Context, endpoint, tlsMode 
 	}
 
 	p.client = client
+
+	if diags := p.verifyServerVersion(ctx); diags.HasErrors() {
+		_ = client.Close()
+		p.client = nil
+		return diags
+	}
 	return nil
+}
+
+// verifyServerVersion queries the server's reported VERSION() string
+// and compares its major.minor against the declared target. Patch-level
+// drift and vendor suffixes (e.g. "8.4.5-log", "8.0.35-aurora.3") are
+// tolerated; only major.minor mismatch fails.
+func (p *Provider) verifyServerVersion(ctx context.Context) dcl.Diagnostics {
+	var serverVersion string
+	if err := p.client.DB().QueryRowContext(ctx, "SELECT VERSION()").Scan(&serverVersion); err != nil {
+		return dcl.Diagnostics{{
+			Severity:   dcl.SeverityError,
+			Message:    fmt.Sprintf("failed to query server version: %s", err),
+			Suggestion: "verify the connected user can execute SELECT VERSION() (it's available to any authenticated user)",
+		}}
+	}
+	cmp, err := provider.CompareVersions(serverVersion, p.version)
+	if err != nil {
+		return dcl.Diagnostics{{
+			Severity: dcl.SeverityError,
+			Message:  fmt.Sprintf("could not parse server version %q: %s", serverVersion, err),
+		}}
+	}
+	if cmp != 0 {
+		return dcl.Diagnostics{{
+			Severity: dcl.SeverityError,
+			Message: fmt.Sprintf(
+				`server reports %s but context targets %q`,
+				serverVersion, p.version,
+			),
+			Suggestion: fmt.Sprintf(
+				`either update the provider block to version = "%s", or upgrade/downgrade the cluster before applying this config`,
+				majorMinor(serverVersion),
+			),
+		}}
+	}
+	return nil
+}
+
+// majorMinor returns the "M.N" prefix of a version string, used only
+// for operator-facing suggestion messages. Falls back to the input
+// when parsing fails so messages never garble.
+func majorMinor(v string) string {
+	out := ""
+	dots := 0
+	for _, r := range v {
+		if r == '.' {
+			dots++
+			if dots == 2 {
+				break
+			}
+		}
+		if r >= '0' && r <= '9' || r == '.' {
+			out += string(r)
+			continue
+		}
+		break
+	}
+	if dots < 1 {
+		return v
+	}
+	return out
 }
 
 // requireStringField fetches a required string field, producing a
@@ -152,6 +247,43 @@ func optionalString(config *provider.OrderedMap, name string) string {
 		return ""
 	}
 	return v.Str
+}
+
+// resolveVersionField parses the required `version` enum. Per ADR
+// 0009, the user must commit to a supported MySQL major.minor target.
+// Known-deferred versions produce a specific diagnostic pointing at
+// the tracking issue.
+func resolveVersionField(config *provider.OrderedMap) (string, dcl.Diagnostics) {
+	v, ok := config.Get("version")
+	if !ok {
+		return "", dcl.Diagnostics{{
+			Severity:   dcl.SeverityError,
+			Message:    `"version" is required — declare the MySQL major.minor target so datastorectl can gate version-specific attributes at validate time`,
+			Suggestion: `add version = "8.4" (LTS) or version = "8.0" to the mysql provider block`,
+		}}
+	}
+	if v.Kind != provider.KindString {
+		return "", dcl.Diagnostics{{
+			Severity: dcl.SeverityError,
+			Message:  `"version" must be a string (e.g. "8.4")`,
+		}}
+	}
+	version := v.Str
+	if reason, deferred := deferredVersions[version]; deferred {
+		return "", dcl.Diagnostics{{
+			Severity:   dcl.SeverityError,
+			Message:    fmt.Sprintf(`version %q is not supported in this release: %s`, version, reason),
+			Suggestion: `use version = "8.0" or version = "8.4" for now`,
+		}}
+	}
+	if !supportedVersions[version] {
+		return "", dcl.Diagnostics{{
+			Severity:   dcl.SeverityError,
+			Message:    fmt.Sprintf(`version must be "8.0" or "8.4", got %q`, version),
+			Suggestion: `use version = "8.4" for the current MySQL LTS line`,
+		}}
+	}
+	return version, nil
 }
 
 // resolveTLSField parses the optional `tls` enum, defaulting to
