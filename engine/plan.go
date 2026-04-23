@@ -67,6 +67,10 @@ type PlanOptions struct {
 	// move to Plan.Unmanaged and are neither displayed per-resource nor
 	// executed.
 	Prune bool
+	// AllowSelfLockout permits Apply to execute even when Plan.Guards is
+	// non-empty. Without this, Apply refuses to run any of the planned
+	// operations when a guard is present.
+	AllowSelfLockout bool
 }
 
 // HasChanges reports whether the plan contains any non-no-op changes.

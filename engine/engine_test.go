@@ -1128,3 +1128,62 @@ func TestEngine_plan_no_guards_when_provider_does_not_implement_DeleteGuarder(t 
 		t.Errorf("expected no guards, got %d", len(plan.Guards))
 	}
 }
+
+func TestEngine_Apply_refuses_when_guards_present(t *testing.T) {
+	liveOnly := provider.Resource{
+		ID: provider.ResourceID{Type: "engapplyguard_role", Name: "victim"},
+	}
+	mock := &guardingEngineProvider{
+		mockEngineProvider: mockEngineProvider{
+			discoverFn: func(context.Context) ([]provider.Resource, dcl.Diagnostics) {
+				return []provider.Resource{liveOnly}, nil
+			},
+		},
+		guards: []provider.DeleteGuard{
+			{Resource: liveOnly.ID, Reason: "would revoke caller access"},
+		},
+	}
+	provider.Register("engapplyguard", func() provider.Provider { return mock })
+
+	file := makeFile(provider.ResourceID{Type: "engapplyguard_role", Name: "keeper"})
+	e := &Engine{SecretResolver: stubSecretResolver{}}
+
+	_, err := e.Apply(context.Background(), file, nil, PlanOptions{Prune: true})
+	if err == nil {
+		t.Fatal("Apply should refuse when guards are present and AllowSelfLockout is false")
+	}
+	if !strings.Contains(err.Error(), "refusing to apply") {
+		t.Errorf("error should mention refusal, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "allow-self-lockout") {
+		t.Errorf("error should mention override flag, got: %v", err)
+	}
+}
+
+func TestEngine_Apply_proceeds_when_AllowSelfLockout_set(t *testing.T) {
+	liveOnly := provider.Resource{
+		ID: provider.ResourceID{Type: "engapplyallow_role", Name: "victim"},
+	}
+	mock := &guardingEngineProvider{
+		mockEngineProvider: mockEngineProvider{
+			discoverFn: func(context.Context) ([]provider.Resource, dcl.Diagnostics) {
+				return []provider.Resource{liveOnly}, nil
+			},
+		},
+		guards: []provider.DeleteGuard{
+			{Resource: liveOnly.ID, Reason: "would revoke caller access"},
+		},
+	}
+	provider.Register("engapplyallow", func() provider.Provider { return mock })
+
+	file := makeFile(provider.ResourceID{Type: "engapplyallow_role", Name: "keeper"})
+	e := &Engine{SecretResolver: stubSecretResolver{}}
+
+	result, err := e.Apply(context.Background(), file, nil, PlanOptions{Prune: true, AllowSelfLockout: true})
+	if err != nil {
+		t.Fatalf("Apply should proceed when AllowSelfLockout is true: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected ApplyResult")
+	}
+}

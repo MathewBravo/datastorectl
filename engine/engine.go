@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/MathewBravo/datastorectl/config"
 	"github.com/MathewBravo/datastorectl/dcl"
@@ -217,10 +218,23 @@ func (e *Engine) Plan(ctx context.Context, file *dcl.File, configs map[string]*p
 
 // Apply runs the full pipeline: plan → validate → order → execute.
 // With PlanOptions{Prune: false} (default), deletes are skipped entirely.
+// If Plan.Guards is non-empty and opts.AllowSelfLockout is false, Apply
+// refuses to execute any operation — guards are a hard stop.
 func (e *Engine) Apply(ctx context.Context, file *dcl.File, configs map[string]*provider.OrderedMap, opts PlanOptions) (*ApplyResult, error) {
 	result, err := e.plan(ctx, file, configs, opts)
 	if err != nil {
 		return nil, fmt.Errorf("plan: %w", err)
+	}
+	if len(result.plan.Guards) > 0 && !opts.AllowSelfLockout {
+		lines := make([]string, len(result.plan.Guards))
+		for i, g := range result.plan.Guards {
+			lines[i] = fmt.Sprintf("  - %s: %s", g.Resource, g.Reason)
+		}
+		return nil, fmt.Errorf(
+			"refusing to apply: %d delete(s) would lock out the authenticated caller:\n%s\n\npass --allow-self-lockout to override",
+			len(result.plan.Guards),
+			strings.Join(lines, "\n"),
+		)
 	}
 	if err := validateResources(ctx, result.plan, result.providers); err != nil {
 		return nil, err
