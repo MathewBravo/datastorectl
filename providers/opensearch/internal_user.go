@@ -203,3 +203,9 @@ func (h *internalUserHandler) Apply(ctx context.Context, client *Client, op prov
 		return fmt.Errorf("opensearch_internal_user.%s: unsupported operation %s", r.ID.Name, op)
 	}
 }
+
+// classifyInternalUserLockout reports whether deleting the given
+// internal user would delete the caller's own account.
+func classifyInternalUserLockout(r provider.Resource, caller callerIdentity) bool {
+	return caller.UserName != "" && r.ID.Name == caller.UserName
+}

@@ -194,3 +194,36 @@ func (h *roleMappingHandler) Apply(ctx context.Context, client *Client, op provi
 		return fmt.Errorf("opensearch_role_mapping.%s: unsupported operation %s", r.ID.Name, op)
 	}
 }
+
+// classifyRoleMappingLockout reports whether deleting the given role
+// mapping would revoke access for the caller. It is a lockout delete if:
+//   - the mapping's users list contains the caller's user_name, OR
+//   - the mapping's users list contains "*" (matches every user), OR
+//   - the mapping's backend_roles intersects the caller's backend_roles.
+func classifyRoleMappingLockout(r provider.Resource, caller callerIdentity) bool {
+	if users, ok := r.Body.Get("users"); ok && users.Kind == provider.KindList {
+		for _, v := range users.List {
+			if v.Kind != provider.KindString {
+				continue
+			}
+			if v.Str == "*" || v.Str == caller.UserName {
+				return true
+			}
+		}
+	}
+	if backendRoles, ok := r.Body.Get("backend_roles"); ok && backendRoles.Kind == provider.KindList {
+		callerSet := make(map[string]struct{}, len(caller.BackendRoles))
+		for _, br := range caller.BackendRoles {
+			callerSet[br] = struct{}{}
+		}
+		for _, v := range backendRoles.List {
+			if v.Kind != provider.KindString {
+				continue
+			}
+			if _, hit := callerSet[v.Str]; hit {
+				return true
+			}
+		}
+	}
+	return false
+}
