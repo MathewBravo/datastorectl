@@ -1,0 +1,13 @@
+{
+  "Privileges": [
+    "DELETE",
+    "INSERT",
+    "SELECT",
+    "UPDATE"
+  ],
+  "Database": "appdb",
+  "Table": "*",
+  "User": "basic_user",
+  "Host": "%",
+  "GrantOption": false
+}

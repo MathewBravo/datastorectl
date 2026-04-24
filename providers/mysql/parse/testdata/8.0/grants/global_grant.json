@@ -1,0 +1,11 @@
+{
+  "Privileges": [
+    "PROCESS",
+    "REPLICATION CLIENT"
+  ],
+  "Database": "*",
+  "Table": "*",
+  "User": "basic_user",
+  "Host": "%",
+  "GrantOption": false
+}

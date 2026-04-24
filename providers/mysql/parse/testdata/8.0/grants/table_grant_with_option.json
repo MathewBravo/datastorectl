@@ -1,0 +1,10 @@
+{
+  "Privileges": [
+    "ALL"
+  ],
+  "Database": "appdb",
+  "Table": "users",
+  "User": "basic_user",
+  "Host": "%",
+  "GrantOption": true
+}
