@@ -62,6 +62,94 @@ func (h *userHandler) Normalize(_ context.Context, r provider.Resource) (provide
 	return r, nil
 }
 
+// Equal answers "do these two users match?" with plugin-aware logic
+// that the engine's structural diff cannot express. Specifically, it
+// delegates password comparison to auth.Compare (which knows how to
+// rehash declared cleartext against the live server's stored salt),
+// then structurally compares the remaining attributes with default
+// values filled in for anything the declared side omitted.
+//
+// Returns true only when password and every other non-defaulted
+// attribute match. Returning false falls through to the engine's
+// structural DiffResources so the plan still renders attribute-level
+// output for ChangeUpdate.
+func (h *userHandler) Equal(_ context.Context, desired, live provider.Resource) (bool, error) {
+	plugin := getBodyString(desired.Body, "auth_plugin")
+	if plugin == "" {
+		plugin = auth.PluginCachingSHA2
+	}
+	decl := auth.Declared{
+		Plugin:    plugin,
+		Cleartext: getBodyString(desired.Body, "password"),
+		Hash:      getBodyString(desired.Body, "password_hash"),
+	}
+	liveHash := getBodyString(live.Body, "password_hash")
+	livePlugin := getBodyString(live.Body, "auth_plugin")
+
+	// Plugin shape check first. aws_iam is compared by plugin name
+	// alone (the server plugin is AWSAuthenticationPlugin, which is
+	// what discovered reports).
+	switch plugin {
+	case auth.PluginAWSIAM:
+		if livePlugin != "AWSAuthenticationPlugin" && livePlugin != auth.PluginAWSIAM {
+			return false, nil
+		}
+	case auth.PluginCachingSHA2, auth.PluginNativePassword:
+		if livePlugin != "" && livePlugin != plugin {
+			return false, nil
+		}
+		match, err := auth.Compare(decl, liveHash)
+		if err != nil {
+			return false, fmt.Errorf("mysql_user %q: %w", desired.ID.Name, err)
+		}
+		if !match {
+			return false, nil
+		}
+	default:
+		return false, nil
+	}
+
+	// All other attributes compared structurally. Defaults filled in
+	// for anything the declared side omitted so declared "account_locked
+	// not set" matches discovered "account_locked = false".
+	return userAttrsEqual(desired, live), nil
+}
+
+// userAttrsEqual compares every non-password mysql_user attribute,
+// treating unset declared attributes as their default value. Password
+// comparison is already handled by auth.Compare in the caller.
+func userAttrsEqual(desired, live provider.Resource) bool {
+	if getBodyBool(desired.Body, "account_locked") != getBodyBool(live.Body, "account_locked") {
+		return false
+	}
+	for _, key := range []string{
+		"require_ssl", "require_x509",
+	} {
+		if getBodyBool(desired.Body, key) != getBodyBool(live.Body, key) {
+			return false
+		}
+	}
+	for _, key := range []string{
+		"require_issuer", "require_subject", "require_cipher",
+		"comment", "attribute",
+	} {
+		if getBodyString(desired.Body, key) != getBodyString(live.Body, key) {
+			return false
+		}
+	}
+	for _, key := range []string{
+		"max_queries_per_hour", "max_connections_per_hour",
+		"max_updates_per_hour", "max_user_connections",
+		"password_expire_days", "password_history",
+		"password_reuse_interval",
+	} {
+		if getBodyInt(desired.Body, key) != getBodyInt(live.Body, key) {
+			return false
+		}
+	}
+	return true
+}
+
 // Discover enumerates every user on the server that isn't a role
 // (i.e. account_locked='N' OR authentication_string<>''). Per user it
 // runs SHOW CREATE USER and parses the output via the Phase 21 parser,

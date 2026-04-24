@@ -185,6 +185,26 @@ func roleNameFromID(id string) string {
 	return id
 }
 
+// Equal implements provider.ResourceDiffer. Handlers that declare
+// Equal handle their own comparison semantics (e.g. mysql_user
+// delegating password comparison to auth.Compare). Handlers without
+// Equal return false so the engine falls through to structural diff.
+func (p *Provider) Equal(ctx context.Context, desired, live provider.Resource) (bool, dcl.Diagnostics) {
+	h, ok := p.handlers[desired.ID.Type]
+	if !ok {
+		return false, nil
+	}
+	eq, ok := h.(resourceEqualer)
+	if !ok {
+		return false, nil
+	}
+	match, err := eq.Equal(ctx, desired, live)
+	if err != nil {
+		return false, dcl.Diagnostics{{Severity: dcl.SeverityError, Message: err.Error()}}
+	}
+	return match, nil
+}
+
 // GuardDeletes implements provider.DeleteGuarder. It runs the three
 // classification functions against every planned delete and returns a
 // DeleteGuard for each match with a diagnostic-quality Reason.

@@ -41,16 +41,17 @@ func (h *roleHandler) Validate(_ context.Context, r provider.Resource) error {
 // the DCL or what order the server returned edges in.
 func (h *roleHandler) Normalize(_ context.Context, r provider.Resource) (provider.Resource, error) {
 	if r.Body == nil {
-		return r, nil
+		r.Body = provider.NewOrderedMap()
 	}
-	v, ok := r.Body.Get("granted_roles")
-	if !ok || v.Kind != provider.KindList {
-		return r, nil
-	}
-	names := make([]string, 0, len(v.List))
-	for _, e := range v.List {
-		if e.Kind == provider.KindString {
-			names = append(names, e.Str)
+	// Always materialize granted_roles so declared (often missing) and
+	// discovered (always present, possibly empty) have the same shape.
+	// Sort the list for deterministic diff ordering.
+	var names []string
+	if v, ok := r.Body.Get("granted_roles"); ok && v.Kind == provider.KindList {
+		for _, e := range v.List {
+			if e.Kind == provider.KindString {
+				names = append(names, e.Str)
+			}
 		}
 	}
 	sort.Strings(names)

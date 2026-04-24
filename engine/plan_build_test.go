@@ -1,8 +1,10 @@
 package engine
 
 import (
+	"context"
 	"testing"
 
+	"github.com/MathewBravo/datastorectl/dcl"
 	"github.com/MathewBravo/datastorectl/provider"
 )
 
@@ -19,7 +21,7 @@ func makeRes(typ, name string, kvs ...any) provider.Resource {
 
 func TestBuildPlan(t *testing.T) {
 	t.Run("both_empty", func(t *testing.T) {
-		p := BuildPlan(nil, nil)
+		p := BuildPlan(context.Background(), nil, nil, nil)
 		if len(p.Changes) != 0 {
 			t.Fatalf("expected 0 changes, got %d", len(p.Changes))
 		}
@@ -33,7 +35,7 @@ func TestBuildPlan(t *testing.T) {
 			makeRes("r", "a", "x", provider.IntVal(1)),
 			makeRes("r", "b", "x", provider.IntVal(2)),
 		}
-		p := BuildPlan(desired, nil)
+		p := BuildPlan(context.Background(), desired, nil, nil)
 		if len(p.Changes) != 2 {
 			t.Fatalf("expected 2 changes, got %d", len(p.Changes))
 		}
@@ -54,7 +56,7 @@ func TestBuildPlan(t *testing.T) {
 		live := []provider.Resource{
 			makeRes("r", "a", "x", provider.IntVal(1)),
 		}
-		p := BuildPlan(nil, live)
+		p := BuildPlan(context.Background(), nil, live, nil)
 		if len(p.Changes) != 1 {
 			t.Fatalf("expected 1 change, got %d", len(p.Changes))
 		}
@@ -73,7 +75,7 @@ func TestBuildPlan(t *testing.T) {
 		r := makeRes("r", "a", "x", provider.IntVal(1))
 		desired := []provider.Resource{r}
 		live := []provider.Resource{r}
-		p := BuildPlan(desired, live)
+		p := BuildPlan(context.Background(), desired, live, nil)
 		if len(p.Changes) != 1 {
 			t.Fatalf("expected 1 change, got %d", len(p.Changes))
 		}
@@ -88,7 +90,7 @@ func TestBuildPlan(t *testing.T) {
 	t.Run("modified_is_update", func(t *testing.T) {
 		desired := []provider.Resource{makeRes("r", "a", "x", provider.IntVal(2))}
 		live := []provider.Resource{makeRes("r", "a", "x", provider.IntVal(1))}
-		p := BuildPlan(desired, live)
+		p := BuildPlan(context.Background(), desired, live, nil)
 		if len(p.Changes) != 1 {
 			t.Fatalf("expected 1 change, got %d", len(p.Changes))
 		}
@@ -115,7 +117,7 @@ func TestBuildPlan(t *testing.T) {
 			makeRes("r", "change", "x", provider.IntVal(1)),
 			makeRes("r", "old", "x", provider.IntVal(4)), // delete
 		}
-		p := BuildPlan(desired, live)
+		p := BuildPlan(context.Background(), desired, live, nil)
 		if len(p.Changes) != 4 {
 			t.Fatalf("expected 4 changes, got %d", len(p.Changes))
 		}
@@ -143,7 +145,7 @@ func TestBuildPlan(t *testing.T) {
 	t.Run("update_carries_diff", func(t *testing.T) {
 		desired := []provider.Resource{makeRes("r", "a", "x", provider.IntVal(2), "y", provider.IntVal(3))}
 		live := []provider.Resource{makeRes("r", "a", "x", provider.IntVal(1))}
-		p := BuildPlan(desired, live)
+		p := BuildPlan(context.Background(), desired, live, nil)
 		c := p.Changes[0]
 		if c.Type != ChangeUpdate {
 			t.Fatalf("expected ChangeUpdate, got %s", c.Type)
@@ -163,7 +165,7 @@ func TestBuildPlan(t *testing.T) {
 	t.Run("pointers_reference_input_slices", func(t *testing.T) {
 		desired := []provider.Resource{makeRes("r", "a", "x", provider.IntVal(2))}
 		live := []provider.Resource{makeRes("r", "a", "x", provider.IntVal(1))}
-		p := BuildPlan(desired, live)
+		p := BuildPlan(context.Background(), desired, live, nil)
 		c := p.Changes[0]
 		if c.Desired != &desired[0] {
 			t.Fatal("Desired should point into the desired slice")
@@ -172,4 +174,61 @@ func TestBuildPlan(t *testing.T) {
 			t.Fatal("Live should point into the live slice")
 		}
 	})
+
+	t.Run("resource_differ_equal_collapses_to_noop", func(t *testing.T) {
+		// Desired and live carry structurally different bodies; the
+		// differ returns true so the pair becomes ChangeNoOp, and the
+		// structural diff is never consulted.
+		desired := []provider.Resource{makeRes("diff_r", "a", "password", provider.StringVal("cleartext"))}
+		live := []provider.Resource{makeRes("diff_r", "a", "password_hash", provider.StringVal("$hash"))}
+		providers := map[string]provider.Provider{
+			"diff_r": &differMock{equal: true},
+		}
+		p := BuildPlan(context.Background(), desired, live, providers)
+		if len(p.Changes) != 1 {
+			t.Fatalf("expected 1 change, got %d", len(p.Changes))
+		}
+		if p.Changes[0].Type != ChangeNoOp {
+			t.Errorf("expected ChangeNoOp, got %s", p.Changes[0].Type)
+		}
+	})
+
+	t.Run("resource_differ_equal_false_falls_through_to_structural_diff", func(t *testing.T) {
+		desired := []provider.Resource{makeRes("diff_r", "a", "x", provider.IntVal(2))}
+		live := []provider.Resource{makeRes("diff_r", "a", "x", provider.IntVal(1))}
+		providers := map[string]provider.Provider{
+			"diff_r": &differMock{equal: false},
+		}
+		p := BuildPlan(context.Background(), desired, live, providers)
+		if len(p.Changes) != 1 {
+			t.Fatalf("expected 1 change, got %d", len(p.Changes))
+		}
+		if p.Changes[0].Type != ChangeUpdate {
+			t.Errorf("expected ChangeUpdate from structural diff, got %s", p.Changes[0].Type)
+		}
+	})
+}
+
+// differMock is a provider that only implements ResourceDiffer.
+// The other methods are unused by BuildPlan.
+type differMock struct {
+	equal bool
+}
+
+func (m *differMock) Configure(context.Context, *provider.OrderedMap) dcl.Diagnostics {
+	return nil
+}
+func (m *differMock) Discover(context.Context) ([]provider.Resource, dcl.Diagnostics) {
+	return nil, nil
+}
+func (m *differMock) Normalize(_ context.Context, r provider.Resource) (provider.Resource, dcl.Diagnostics) {
+	return r, nil
+}
+func (m *differMock) Validate(context.Context, provider.Resource) dcl.Diagnostics { return nil }
+func (m *differMock) Apply(context.Context, provider.Operation, provider.Resource) dcl.Diagnostics {
+	return nil
+}
+func (m *differMock) Schemas() map[string]provider.Schema { return nil }
+func (m *differMock) Equal(_ context.Context, _, _ provider.Resource) (bool, dcl.Diagnostics) {
+	return m.equal, nil
 }
