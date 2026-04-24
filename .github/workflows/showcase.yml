@@ -124,16 +124,21 @@ jobs:
           docker compose -f docker-compose.mysql.yml logs
           exit 1
 
+      - name: Install mysql-client on runner
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq mysql-client
+
       - name: Bootstrap datastorectl account
         run: |
-          # Force TCP protocol so we authenticate as root@% (password
-          # auth) rather than root@localhost (socket auth). Default
-          # mysql client goes through unix socket, which on mysql:8.4
-          # matches the root@localhost row and rejects the password.
+          # Run the mysql client on the runner against the
+          # port-forwarded 3306. This authenticates as root@<runner-IP>
+          # which matches root@% (password auth). Running the client
+          # inside the container matches root@localhost (socket auth)
+          # and rejects the password — that's why we don't docker exec.
           sed 's/<REPLACE_ME>/showcase_pw_4rEaDy/' \
               providers/mysql/bootstrap/bootstrap-readwrite.sql \
-            | docker exec -i datastorectl-mysql-1 \
-                mysql -h 127.0.0.1 --protocol=TCP -uroot -pdatastorectl
+            | mysql -h 127.0.0.1 -P 3306 -uroot -pdatastorectl
 
       - name: validate
         env:
