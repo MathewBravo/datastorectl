@@ -12,11 +12,14 @@ import (
 
 // callerIdentity captures the authenticated MySQL principal. Fetched
 // once during Configure and cached on the provider so self-lockout
-// guards can run against stable values.
+// guards can run against stable values. GrantedRoles is the full set
+// of inbound role edges from mysql.role_edges; DefaultRoles is the
+// subset set as session defaults in mysql.default_roles.
 type callerIdentity struct {
 	User         string
 	Host         string
 	DefaultRoles []roleRef
+	GrantedRoles []roleRef
 }
 
 // roleRef identifies a role by the server's (user, host) tuple.
@@ -45,19 +48,37 @@ func fetchCallerIdentity(ctx context.Context, db *sql.DB) (callerIdentity, error
 		FROM mysql.default_roles
 		WHERE USER = ? AND HOST = ?
 	`, caller.User, caller.Host)
-	if err != nil {
-		// default_roles exists in MySQL 8.0+. If the table is missing
-		// (e.g. 5.7, unlikely here given the version gate but defensive),
-		// treat as no default roles rather than hard-fail.
-		return caller, nil
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var ru, rh string
-		if err := rows.Scan(&ru, &rh); err != nil {
-			return callerIdentity{}, err
+	if err == nil {
+		for rows.Next() {
+			var ru, rh string
+			if err := rows.Scan(&ru, &rh); err != nil {
+				rows.Close()
+				return callerIdentity{}, err
+			}
+			caller.DefaultRoles = append(caller.DefaultRoles, roleRef{User: ru, Host: rh})
 		}
-		caller.DefaultRoles = append(caller.DefaultRoles, roleRef{User: ru, Host: rh})
+		rows.Close()
+	}
+	// If mysql.default_roles is missing (e.g. 5.7, unlikely given the
+	// version gate but defensive), leave DefaultRoles empty.
+
+	// Load the full set of inbound role edges so we can guard
+	// cascade-style lockouts — DROP ROLE of a non-default role
+	// silently revokes the role's privileges from the caller.
+	edgeRows, err := db.QueryContext(ctx, `
+		SELECT FROM_USER, FROM_HOST FROM mysql.role_edges
+		WHERE TO_USER = ? AND TO_HOST = ?
+	`, caller.User, caller.Host)
+	if err == nil {
+		for edgeRows.Next() {
+			var ru, rh string
+			if err := edgeRows.Scan(&ru, &rh); err != nil {
+				edgeRows.Close()
+				return callerIdentity{}, err
+			}
+			caller.GrantedRoles = append(caller.GrantedRoles, roleRef{User: ru, Host: rh})
+		}
+		edgeRows.Close()
 	}
 	return caller, nil
 }
@@ -122,17 +143,46 @@ func classifyDefaultRoleLockout(r provider.Resource, caller callerIdentity) bool
 	if r.ID.Type != "mysql_role" {
 		return false
 	}
-	name := r.ID.Name
-	// Strip any @host suffix if Normalize has been applied.
-	if at := strings.Index(name, "@"); at >= 0 {
-		name = name[:at]
-	}
+	name := roleNameFromID(r.ID.Name)
 	for _, dr := range caller.DefaultRoles {
 		if dr.User == name {
 			return true
 		}
 	}
 	return false
+}
+
+// classifyGrantedRoleCascadeLockout returns true when r is a
+// mysql_role delete whose name matches a role granted to the caller
+// but not set as a default role. Such a delete cascades through
+// mysql.role_edges, silently revoking the role's privileges from the
+// caller. Excludes default roles to avoid double-classification — the
+// default-role case already covers them with a more specific reason.
+func classifyGrantedRoleCascadeLockout(r provider.Resource, caller callerIdentity) bool {
+	if r.ID.Type != "mysql_role" {
+		return false
+	}
+	name := roleNameFromID(r.ID.Name)
+	// Exclude default roles to keep classifications distinct.
+	for _, dr := range caller.DefaultRoles {
+		if dr.User == name {
+			return false
+		}
+	}
+	for _, gr := range caller.GrantedRoles {
+		if gr.User == name {
+			return true
+		}
+	}
+	return false
+}
+
+// roleNameFromID strips any @host suffix Normalize may have applied.
+func roleNameFromID(id string) string {
+	if at := strings.Index(id, "@"); at >= 0 {
+		return id[:at]
+	}
+	return id
 }
 
 // GuardDeletes implements provider.DeleteGuarder. It runs the three
@@ -160,6 +210,12 @@ func (p *Provider) GuardDeletes(_ context.Context, deletes []provider.Resource) 
 				Resource: r.ID,
 				Reason: fmt.Sprintf("would delete caller %s@%s's default role, breaking session auth after apply",
 					p.caller.User, p.caller.Host),
+			})
+		case classifyGrantedRoleCascadeLockout(r, p.caller):
+			guards = append(guards, provider.DeleteGuard{
+				Resource: r.ID,
+				Reason: fmt.Sprintf("would cascade-revoke role %q from caller %s@%s via mysql.role_edges",
+					roleNameFromID(r.ID.Name), p.caller.User, p.caller.Host),
 			})
 		}
 	}

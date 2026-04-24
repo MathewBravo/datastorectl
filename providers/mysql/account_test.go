@@ -149,6 +149,69 @@ func TestClassifyDefaultRoleLockout(t *testing.T) {
 	}
 }
 
+// TestClassifyGrantedRoleCascadeLockout covers case 4 (non-default
+// role cascade). Role is granted to caller but not default — DROP
+// ROLE would silently cascade-revoke, breaking privileges the caller
+// currently uses.
+func TestClassifyGrantedRoleCascadeLockout(t *testing.T) {
+	caller := callerIdentity{
+		User: "datastorectl", Host: "%",
+		DefaultRoles: []roleRef{{User: "default_role", Host: "%"}},
+		GrantedRoles: []roleRef{
+			{User: "default_role", Host: "%"},
+			{User: "data_reader", Host: "%"},
+			{User: "monitor", Host: "%"},
+		},
+	}
+	cases := []struct {
+		name     string
+		resource provider.Resource
+		want     bool
+	}{
+		{
+			name: "delete granted non-default role",
+			resource: provider.Resource{
+				ID:   provider.ResourceID{Type: "mysql_role", Name: "data_reader"},
+				Body: provider.NewOrderedMap(),
+			},
+			want: true,
+		},
+		{
+			name: "delete another granted non-default role",
+			resource: provider.Resource{
+				ID:   provider.ResourceID{Type: "mysql_role", Name: "monitor"},
+				Body: provider.NewOrderedMap(),
+			},
+			want: true,
+		},
+		{
+			name: "delete default role (case 3 territory, not case 4)",
+			resource: provider.Resource{
+				ID:   provider.ResourceID{Type: "mysql_role", Name: "default_role"},
+				Body: provider.NewOrderedMap(),
+			},
+			// Classified by case 3 (default role delete), not case 4.
+			// Case 4 excludes default roles so we don't double-classify.
+			want: false,
+		},
+		{
+			name: "delete ungranted role",
+			resource: provider.Resource{
+				ID:   provider.ResourceID{Type: "mysql_role", Name: "unrelated"},
+				Body: provider.NewOrderedMap(),
+			},
+			want: false,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := classifyGrantedRoleCascadeLockout(c.resource, caller); got != c.want {
+				t.Errorf("classifyGrantedRoleCascadeLockout = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
 // TestGuardDeletes_Integration runs the full GuardDeletes against a
 // live cluster. Verifies caller-identity fetch and all three cases
 // fire against realistic delete sets.
