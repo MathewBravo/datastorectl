@@ -25,6 +25,15 @@ type schemaProvider interface {
 	Schema() provider.Schema
 }
 
+// resourceEqualer is an optional interface a handler may implement to
+// answer "do these two resources match?" with domain-specific logic.
+// mysql_user implements this to delegate password comparison to
+// auth.Compare (per ADR 0010); other handlers fall back to the
+// engine's structural diff.
+type resourceEqualer interface {
+	Equal(ctx context.Context, desired, live provider.Resource) (bool, error)
+}
+
 // errNotImplemented is returned by scaffold handlers until the real
 // implementation lands in later phases.
 var errNotImplemented = errors.New("mysql provider handler is not implemented yet")

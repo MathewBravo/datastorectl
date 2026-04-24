@@ -71,3 +71,19 @@ type DeleteGuarder interface {
 type TypeOrderer interface {
 	TypeOrderings() []TypeOrdering
 }
+
+// ResourceDiffer is an optional interface a Provider may implement to
+// answer "do these two resources match?" with domain-specific logic
+// that the engine's structural diff cannot express. The canonical
+// case is the MySQL provider's password/password_hash asymmetry:
+// declared `password = secret(...)` cleartext must compare equal to
+// discovered `password_hash = "$A$005$..."` by rehashing the
+// cleartext against the stored salt (see ADR 0010).
+//
+// Equal returns true when the engine should treat the pair as
+// convergent (emitting ChangeNoOp). Returning false falls through to
+// the structural diff, which produces the attribute-level output for
+// ChangeUpdate. Returning an error surfaces as a plan-time diagnostic.
+type ResourceDiffer interface {
+	Equal(ctx context.Context, desired, live Resource) (bool, dcl.Diagnostics)
+}

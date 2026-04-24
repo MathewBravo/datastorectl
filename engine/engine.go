@@ -154,7 +154,7 @@ func (e *Engine) plan(ctx context.Context, file *dcl.File, configs map[string]*p
 	}
 
 	// 13. Build full plan.
-	plan := BuildPlan(normalizedDesired, normalizedLive)
+	plan := BuildPlan(ctx, normalizedDesired, normalizedLive, providers)
 
 	// 14. Apply prune policy: when Prune=false, split deletes out of Changes
 	// into Unmanaged. The graph and executor only see Changes, so suppressing
