@@ -51,3 +51,56 @@ issue.
   it.
 
 Handler tests in later phases build on these.
+
+## Authenticating with AWS RDS IAM
+
+The provider supports `auth = "rds_iam"` for AWS RDS / Aurora clusters
+that have IAM database authentication enabled. Configuration:
+
+```hcl
+context "prod_rds" {
+  provider = mysql
+  version  = "8.4"
+  endpoint = "prod.cluster-abc.us-east-1.rds.amazonaws.com:3306"
+  auth     = "rds_iam"
+  username = "datastorectl_iam"
+  region   = "us-east-1"
+
+  # optional — pin to a specific shared-config profile
+  # aws_profile = "prod"
+
+  tls      = "required"   # mandatory for rds_iam
+}
+```
+
+The caller's AWS identity (from env vars, `~/.aws/credentials`, an
+EC2/EKS role, or the specified profile) must have an IAM policy
+permitting `rds-db:connect` on the target DB resource:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": "rds-db:connect",
+    "Resource": "arn:aws:rds-db:us-east-1:<account>:dbuser:<resource-id>/datastorectl_iam"
+  }]
+}
+```
+
+The database user itself must be created with IAM authentication
+enabled on the server:
+
+```sql
+CREATE USER 'datastorectl_iam'@'%' IDENTIFIED WITH AWSAuthenticationPlugin AS 'RDS';
+```
+
+Tokens are generated via the AWS SDK at Configure time with ~15-minute
+validity. Since datastorectl is a short-lived CLI, one token per
+invocation is sufficient — no refresh logic is needed.
+
+Integration tests for the rds_iam path require a reachable RDS
+endpoint and valid AWS credentials. Set
+`DATASTORECTL_MYSQL_TEST_RDS_ENDPOINT` and ensure the calling identity
+has `rds-db:connect` on the target. Without these, rds_iam integration
+tests skip; unit tests for the validation paths still run.

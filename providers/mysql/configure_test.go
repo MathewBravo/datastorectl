@@ -97,6 +97,38 @@ func TestConfigure(t *testing.T) {
 			),
 			errSubstr: `version must be "8.0" or "8.4"`,
 		},
+		{
+			name: "rds_iam missing username",
+			config: configMap(
+				"endpoint", "example.rds.amazonaws.com:3306",
+				"auth", "rds_iam",
+				"region", "us-east-1",
+				"version", "8.4",
+			),
+			errSubstr: `"username" is required`,
+		},
+		{
+			name: "rds_iam missing region",
+			config: configMap(
+				"endpoint", "example.rds.amazonaws.com:3306",
+				"auth", "rds_iam",
+				"username", "u",
+				"version", "8.4",
+			),
+			errSubstr: `"region" is required`,
+		},
+		{
+			name: "rds_iam rejects tls disabled",
+			config: configMap(
+				"endpoint", "example.rds.amazonaws.com:3306",
+				"auth", "rds_iam",
+				"username", "u",
+				"region", "us-east-1",
+				"tls", "disabled",
+				"version", "8.4",
+			),
+			errSubstr: `requires TLS`,
+		},
 	}
 
 	f, _ := provider.Lookup("mysql")

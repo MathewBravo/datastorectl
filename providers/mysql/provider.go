@@ -96,11 +96,7 @@ func (p *Provider) Configure(ctx context.Context, config *provider.OrderedMap) d
 	case "password":
 		return p.configurePasswordAuth(ctx, endpoint, tlsMode, config)
 	case "rds_iam":
-		return dcl.Diagnostics{{
-			Severity:   dcl.SeverityError,
-			Message:    `auth = "rds_iam" is not implemented yet`,
-			Suggestion: `use auth = "password" until Phase 24 lands RDS IAM support`,
-		}}
+		return p.configureRDSIAMAuth(ctx, endpoint, tlsMode, config)
 	default:
 		return dcl.Diagnostics{{
 			Severity: dcl.SeverityError,
@@ -223,6 +219,73 @@ func majorMinor(v string) string {
 		return v
 	}
 	return out
+}
+
+// configureRDSIAMAuth validates the RDS-IAM fields, generates a
+// short-lived IAM auth token via the AWS SDK, and opens a client
+// using that token as the password. Token lifetime is ~15 minutes;
+// datastorectl is short-lived enough that a single token per
+// invocation is sufficient.
+func (p *Provider) configureRDSIAMAuth(ctx context.Context, endpoint, tlsMode string, config *provider.OrderedMap) dcl.Diagnostics {
+	if tlsMode == "disabled" {
+		return dcl.Diagnostics{{
+			Severity:   dcl.SeverityError,
+			Message:    `auth = "rds_iam" requires TLS — IAM tokens must not transit the wire in plaintext`,
+			Suggestion: `remove the tls = "disabled" setting or set tls = "required"`,
+		}}
+	}
+
+	username, diags := requireStringField(config, "username",
+		`"username" is required when auth is "rds_iam" — this is the IAM-enabled database user`,
+		`add username = "datastorectl_iam" to the mysql provider block`)
+	if diags.HasErrors() {
+		return diags
+	}
+
+	region, diags := requireStringField(config, "region",
+		`"region" is required when auth is "rds_iam" — the AWS region where your RDS instance lives (e.g. "us-east-1")`,
+		`add region = "us-east-1" to the mysql provider block`)
+	if diags.HasErrors() {
+		return diags
+	}
+
+	profile := optionalString(config, "aws_profile")
+
+	client, err := NewRDSIAMClient(ctx, RDSIAMConfig{
+		Endpoint:   endpoint,
+		Username:   username,
+		Region:     region,
+		AWSProfile: profile,
+		TLS:        tlsMode,
+		TLSCA:      optionalString(config, "tls_ca"),
+		TLSCert:    optionalString(config, "tls_cert"),
+		TLSKey:     optionalString(config, "tls_key"),
+	})
+	if err != nil {
+		return dcl.Diagnostics{{
+			Severity:   dcl.SeverityError,
+			Message:    fmt.Sprintf("failed to create mysql client with rds_iam auth: %s", err),
+			Suggestion: "verify AWS credentials are available (env vars, ~/.aws/credentials, EC2/EKS role, or aws_profile) and the IAM user has rds-db:connect permission on the target DB",
+		}}
+	}
+
+	if err := client.DB().PingContext(ctx); err != nil {
+		_ = client.Close()
+		return dcl.Diagnostics{{
+			Severity:   dcl.SeverityError,
+			Message:    fmt.Sprintf("mysql rds_iam connection check failed: %s", err),
+			Suggestion: "verify the RDS endpoint is reachable, the IAM user is enabled on the DB, and TLS is accepted",
+		}}
+	}
+
+	p.client = client
+
+	if diags := p.verifyServerVersion(ctx); diags.HasErrors() {
+		_ = client.Close()
+		p.client = nil
+		return diags
+	}
+	return nil
 }
 
 // requireStringField fetches a required string field, producing a
