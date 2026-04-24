@@ -1,0 +1,36 @@
+[
+  {
+    "Privileges": [
+      "PROCESS",
+      "REPLICATION CLIENT"
+    ],
+    "Database": "*",
+    "Table": "*",
+    "User": "basic_user",
+    "Host": "%",
+    "GrantOption": false
+  },
+  {
+    "Privileges": [
+      "DELETE",
+      "INSERT",
+      "SELECT",
+      "UPDATE"
+    ],
+    "Database": "appdb",
+    "Table": "*",
+    "User": "basic_user",
+    "Host": "%",
+    "GrantOption": false
+  },
+  {
+    "Privileges": [
+      "ALL"
+    ],
+    "Database": "appdb",
+    "Table": "users",
+    "User": "basic_user",
+    "Host": "%",
+    "GrantOption": true
+  }
+]

@@ -1,0 +1,1 @@
+GRANT PROCESS, REPLICATION CLIENT ON *.* TO `basic_user`@`%`
