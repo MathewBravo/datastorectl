@@ -5,7 +5,11 @@ services:
       MYSQL_ROOT_PASSWORD: datastorectl
       MYSQL_ROOT_HOST: "%"
     ports:
-      - "3306:3306"
+      # Host port 3308 (not 3306) so the showcase doesn't collide with
+      # a locally-installed MySQL or another dev project's mysql
+      # container. The in-container port stays 3306; only the host
+      # mapping is remapped. Showcase DCL points at localhost:3308.
+      - "3308:3306"
     healthcheck:
       test:
         - "CMD"
