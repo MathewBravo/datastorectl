@@ -59,6 +59,42 @@ opensearch_ism_policy "hot_delete" {
 }
 ```
 
+Or a MySQL grant set:
+
+```hcl
+context "demo" {
+  provider = mysql
+  version  = "8.4"
+  endpoint = "localhost:3306"
+  auth     = "password"
+  username = "datastorectl"
+  password = secret("env", "DATASTORECTL_MYSQL_PASSWORD")
+  tls      = "skip-verify"
+}
+
+mysql_database "appdb" {
+  context   = demo
+  charset   = "utf8mb4"
+  collation = "utf8mb4_0900_ai_ci"
+}
+
+mysql_user "app" {
+  context  = demo
+  user     = "app"
+  host     = "%"
+  password = secret("env", "DATASTORECTL_MYSQL_APP_PW")
+}
+
+mysql_grant "app_schema" {
+  context    = demo
+  user       = "app"
+  host       = "%"
+  database   = "appdb"
+  table      = "*"
+  privileges = ["SELECT", "INSERT", "UPDATE", "DELETE"]
+}
+```
+
 ## The three commands
 
 ```
@@ -98,6 +134,20 @@ Local OpenSearch via Docker Compose:
 ./showcase.sh down
 ```
 
+Local MySQL via Docker Compose:
+
+```
+./showcase-mysql.sh up                                          # start MySQL + run bootstrap + build binary
+export DATASTORECTL_MYSQL_PASSWORD=...                          # printed by showcase-mysql.sh up
+export DATASTORECTL_MYSQL_APP_PW=...
+export DATASTORECTL_MYSQL_OPS_PW=...
+./datastorectl validate testdata/showcase-mysql/resources.dcl
+./datastorectl plan     testdata/showcase-mysql/resources.dcl
+./datastorectl apply    testdata/showcase-mysql/resources.dcl
+./datastorectl plan     testdata/showcase-mysql/resources.dcl   # should report no changes
+./showcase-mysql.sh down
+```
+
 Build from source:
 
 ```
@@ -135,6 +185,91 @@ Resource files reference a context by name (`context = prod`). The context confi
 
 When a directory contains resources targeting multiple contexts, pass `--context <name>` to pick one. Safety rail: without the flag, datastorectl refuses to run.
 
+### MySQL provider
+
+The MySQL provider supports two auth modes, TLS with configurable strictness, and three password declaration shapes on `mysql_user`.
+
+**`auth = "password"`** — self-managed MySQL 8.0 / 8.4.
+
+```hcl
+context "prod" {
+  provider = mysql
+  version  = "8.4"
+  endpoint = "prod.example.com:3306"
+  auth     = "password"
+  username = "datastorectl"
+  password = secret("env", "DATASTORECTL_MYSQL_PASSWORD")
+  tls      = "required"
+  # tls_ca   = "/etc/ssl/rds-combined-ca-bundle.pem"  # optional custom CA
+  # tls_cert = "/etc/ssl/client.pem"                  # optional client cert
+  # tls_key  = "/etc/ssl/client.key"                  # optional client key
+}
+```
+
+**`auth = "rds_iam"`** — managed AWS RDS / Aurora with IAM token auth.
+
+```hcl
+context "prod" {
+  provider    = mysql
+  version     = "8.4"
+  endpoint    = "prod-cluster.cluster-xyz.us-east-1.rds.amazonaws.com:3306"
+  auth        = "rds_iam"
+  username    = "datastorectl"
+  region      = "us-east-1"
+  aws_profile = "prod"        # optional; defaults to the ambient AWS credential chain
+  tls         = "required"    # cannot be "disabled" for rds_iam
+  # tls_ca    = "/etc/ssl/rds-combined-ca-bundle.pem" # optional custom CA
+}
+```
+
+**`version`** — required, either `"8.0"` or `"8.4"`. Must match the server's major.minor; patch and vendor suffixes are tolerated.
+
+**TLS** — `tls` is one of:
+
+- `"required"` (default) — verified TLS against the server's CA chain.
+- `"skip-verify"` — TLS in transit, certificate chain not verified. Useful for self-signed dev clusters; never use in production.
+- `"disabled"` — plaintext. Rejected for `auth = "rds_iam"`.
+
+`tls_ca`, `tls_cert`, `tls_key` are optional paths to a custom CA bundle and/or client certificate for mutual TLS.
+
+**Bootstrap SQL scripts** — `providers/mysql/bootstrap/` ships two SQL scripts that create the management account datastorectl connects as:
+
+- `bootstrap-readwrite.sql` creates `datastorectl@%` with `ALL PRIVILEGES ... WITH GRANT OPTION` globally plus `SELECT` on the relevant `mysql.*` schema tables. Use for plan/apply workflows. The broad grant is a category constraint: a grant-management tool must itself hold every privilege it may pass on.
+- `bootstrap-readonly.sql` creates `datastorectl-ro@%` with only the `mysql.*` `SELECT` grants needed for Discover. Use for drift-detection `plan` runs in CI or reviewer access. `apply` under this user will fail at the first write with a MySQL permission error.
+
+Both scripts enforce `REQUIRE SSL` on the account.
+
+**Password declaration shapes on `mysql_user`** — three forms, pick one per user:
+
+```hcl
+# 1. Cleartext. Provider rehashes against the server-chosen salt
+#    to diff. The secret() lookup keeps the password out of files.
+mysql_user "app" {
+  context  = prod
+  user     = "app"
+  host     = "%"
+  password = secret("env", "APP_PW")
+}
+
+# 2. Pre-hashed. Byte-compared against the server's stored hash.
+#    Migration path for mysql_native_password hashes already sitting
+#    in Hiera, Puppet, or a secret store.
+mysql_user "legacy" {
+  context       = prod
+  user          = "legacy"
+  host          = "%"
+  password_hash = secret("env", "LEGACY_PW_HASH")
+}
+
+# 3. AWS IAM. No password field; the server delegates auth to AWS.
+mysql_user "svc" {
+  context     = prod
+  user        = "svc"
+  host        = "%"
+  auth_plugin = "aws_iam"
+}
+```
+
 ## v0.1.0 scope
 
 OpenSearch as the first provider. 9 resource types:
@@ -153,13 +288,18 @@ Auth: basic (self-hosted) and AWS SigV4 (managed OpenSearch Service).
 
 DCL layers 1 through 4: resource blocks with typed attributes, cross-resource references (`role = opensearch_role.log_reader`), the `secret()` built-in for credential resolution, and named connection contexts.
 
-## Roadmap
+MySQL as the second provider. 4 resource types:
 
-TBD once v0.1.0 is out.
+- `mysql_database`
+- `mysql_user`
+- `mysql_role`
+- `mysql_grant`
+
+Auth: password (self-managed MySQL 8.0 / 8.4) and AWS RDS IAM (managed RDS / Aurora).
 
 ## Architecture
 
-Seven modules, each with a narrow job:
+Ten modules, each with a narrow job:
 
 | Module | Responsibility |
 |--------|----------------|
@@ -167,6 +307,9 @@ Seven modules, each with a narrow job:
 | `provider` | Provider interface, resource types, schema system. |
 | `engine` | Discover, diff, dependency graph, parallel executor. Owns diffing so providers don't have to. |
 | `providers/opensearch` | OpenSearch provider. HTTP client with basic + SigV4 auth. |
+| `providers/mysql` | MySQL provider. database/user/role/grant handlers; diffing, self-lockout guard. |
+| `providers/mysql/auth` | Auth dispatch — caching_sha2_password, mysql_native_password, aws_iam plugins. |
+| `providers/mysql/parse` | GRANT statement parser (server GRANT strings → normalized privilege sets for diffing). |
 | `config` | Loads `~/.datastorectl/config.dcl`. Context resolution. Secret lookups. |
 | `output` | Terraform-style colored diffs, JSON output, diagnostic formatting. |
 | `cmd/datastorectl` | Cobra CLI. Thin orchestration layer. |
