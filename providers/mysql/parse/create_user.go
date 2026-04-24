@@ -48,6 +48,20 @@ type CreateUserStmt struct {
 	// Metadata
 	Comment   string
 	Attribute string
+
+	// Default roles set on the user. Populated when SHOW CREATE USER
+	// emits a `DEFAULT ROLE <role>[, <role>]*` clause (MySQL 8 WL#988;
+	// set for every RDS Aurora `admin` user). Parsed so discover does
+	// not error; not currently surfaced as a mysql_user body attribute.
+	// omitempty so fixtures for users without default roles don't need
+	// regeneration.
+	DefaultRoles []DefaultRole `json:",omitempty"`
+}
+
+// DefaultRole is a (name, host) pair from a DEFAULT ROLE clause.
+type DefaultRole struct {
+	Name string
+	Host string
 }
 
 // ParseCreateUser parses one CREATE USER DDL statement produced by
@@ -197,6 +211,8 @@ func (p *createUserParser) parseClause(stmt *CreateUserStmt) error {
 		}
 		stmt.Attribute = s
 		return nil
+	case equalsFoldAny(t.Value, "DEFAULT"):
+		return p.parseDefaultClause(stmt)
 	}
 	return fmt.Errorf("parse: unknown CREATE USER clause %q", t.Value)
 }
@@ -487,6 +503,53 @@ func (p *createUserParser) parseAccountClause(stmt *CreateUserStmt) error {
 		return fmt.Errorf("parse: expected LOCK or UNLOCK after ACCOUNT, got %s", t)
 	}
 	return nil
+}
+
+// parseDefaultClause handles DEFAULT ROLE <role>[, <role>]*. Each role
+// is a (name, host) pair written `ident`@`ident` or 'ident'@'ident'.
+// DEFAULT appears in SHOW CREATE USER output for any user that has
+// default roles set (MySQL 8 WL#988); every RDS Aurora admin user has
+// them.
+func (p *createUserParser) parseDefaultClause(stmt *CreateUserStmt) error {
+	if err := p.expectKeyword("ROLE"); err != nil {
+		return err
+	}
+	for {
+		role, err := p.readRoleIdent()
+		if err != nil {
+			return err
+		}
+		stmt.DefaultRoles = append(stmt.DefaultRoles, role)
+
+		t, err := p.peek()
+		if err != nil {
+			return err
+		}
+		if t.Kind != tkComma {
+			return nil
+		}
+		_, _ = p.next() // consume comma, loop for next role
+	}
+}
+
+// readRoleIdent consumes one `name`@`host` (or 'name'@'host') pair.
+func (p *createUserParser) readRoleIdent() (DefaultRole, error) {
+	name, err := p.readQuotedOrBacktickIdent()
+	if err != nil {
+		return DefaultRole{}, err
+	}
+	t, err := p.next()
+	if err != nil {
+		return DefaultRole{}, err
+	}
+	if t.Kind != tkAt {
+		return DefaultRole{}, fmt.Errorf("parse: expected '@' in DEFAULT ROLE role spec, got %s", t)
+	}
+	host, err := p.readQuotedOrBacktickIdent()
+	if err != nil {
+		return DefaultRole{}, err
+	}
+	return DefaultRole{Name: name, Host: host}, nil
 }
 
 // parsePasswordLockTime handles PASSWORD_LOCK_TIME <N> and

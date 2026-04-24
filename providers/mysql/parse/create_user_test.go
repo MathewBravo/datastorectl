@@ -296,5 +296,83 @@ func TestParseCreateUser_UnquotedSingleQuoteIdentForms(t *testing.T) {
 	}
 }
 
+// TestParseCreateUser_DefaultRoleAurora exercises the exact DDL shape
+// AWS RDS Aurora emits for its master `admin` user. The `DEFAULT ROLE
+// <role>@<host>` clause appears mid-stream between ACCOUNT UNLOCK and
+// PASSWORD HISTORY; the parser must consume it without disturbing the
+// surrounding clauses. Surfaced by #201; tracked in #214.
+func TestParseCreateUser_DefaultRoleAurora(t *testing.T) {
+	ddl := `CREATE USER ` + bt + `admin` + bt + `@` + bt + `%` + bt +
+		` IDENTIFIED WITH 'caching_sha2_password' AS '$A$005$somehash'` +
+		` REQUIRE NONE PASSWORD EXPIRE DEFAULT ACCOUNT UNLOCK` +
+		` DEFAULT ROLE ` + bt + `rds_superuser_role` + bt + `@` + bt + `%` + bt +
+		` PASSWORD HISTORY DEFAULT PASSWORD REUSE INTERVAL DEFAULT` +
+		` PASSWORD REQUIRE CURRENT DEFAULT`
+	stmt, err := ParseCreateUser(ddl, "8.0")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(stmt.DefaultRoles) != 1 {
+		t.Fatalf("DefaultRoles length = %d, want 1: %+v", len(stmt.DefaultRoles), stmt.DefaultRoles)
+	}
+	got := stmt.DefaultRoles[0]
+	if got.Name != "rds_superuser_role" || got.Host != "%" {
+		t.Errorf("DefaultRoles[0] = %+v, want {Name: rds_superuser_role, Host: %%}", got)
+	}
+	// Ensure the clause didn't swallow or confuse neighboring fields.
+	if stmt.PasswordHistory != "DEFAULT" {
+		t.Errorf("PasswordHistory = %q, want DEFAULT (clause after DEFAULT ROLE was skipped)", stmt.PasswordHistory)
+	}
+	if stmt.PasswordRequireCurrent != "DEFAULT" {
+		t.Errorf("PasswordRequireCurrent = %q, want DEFAULT", stmt.PasswordRequireCurrent)
+	}
+}
+
+// TestParseCreateUser_DefaultRoleMultiple covers the comma-separated
+// multi-role form of DEFAULT ROLE. MySQL 8 accepts DEFAULT ROLE r1, r2,
+// r3 and SHOW CREATE USER emits each with its host.
+func TestParseCreateUser_DefaultRoleMultiple(t *testing.T) {
+	ddl := `CREATE USER ` + bt + `u` + bt + `@` + bt + `%` + bt +
+		` IDENTIFIED WITH 'caching_sha2_password' AS ''` +
+		` REQUIRE NONE PASSWORD EXPIRE DEFAULT ACCOUNT UNLOCK` +
+		` DEFAULT ROLE ` + bt + `reader` + bt + `@` + bt + `%` + bt +
+		`, ` + bt + `writer` + bt + `@` + bt + `%` + bt +
+		`, ` + bt + `admin` + bt + `@` + bt + `10.0.%` + bt +
+		` PASSWORD HISTORY DEFAULT PASSWORD REUSE INTERVAL DEFAULT` +
+		` PASSWORD REQUIRE CURRENT DEFAULT`
+	stmt, err := ParseCreateUser(ddl, "8.0")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(stmt.DefaultRoles) != 3 {
+		t.Fatalf("DefaultRoles length = %d, want 3: %+v", len(stmt.DefaultRoles), stmt.DefaultRoles)
+	}
+	want := []DefaultRole{
+		{Name: "reader", Host: "%"},
+		{Name: "writer", Host: "%"},
+		{Name: "admin", Host: "10.0.%"},
+	}
+	for i, w := range want {
+		if stmt.DefaultRoles[i] != w {
+			t.Errorf("DefaultRoles[%d] = %+v, want %+v", i, stmt.DefaultRoles[i], w)
+		}
+	}
+}
+
+// TestParseCreateUser_DefaultRoleSingleQuoted covers the input-form
+// variant where the role identifier uses single quotes instead of
+// backticks. CREATE USER accepts both; the parser already accepts
+// single-quoted user/host, so DEFAULT ROLE should too.
+func TestParseCreateUser_DefaultRoleSingleQuoted(t *testing.T) {
+	ddl := `CREATE USER 'u'@'%' IDENTIFIED WITH 'caching_sha2_password' AS '' REQUIRE NONE DEFAULT ROLE 'role1'@'%'`
+	stmt, err := ParseCreateUser(ddl, "8.0")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(stmt.DefaultRoles) != 1 || stmt.DefaultRoles[0].Name != "role1" {
+		t.Errorf("DefaultRoles = %+v, want [{role1 %%}]", stmt.DefaultRoles)
+	}
+}
+
 // Ensure strings import is retained (used by BasicUser assertion).
 var _ = strings.HasPrefix
