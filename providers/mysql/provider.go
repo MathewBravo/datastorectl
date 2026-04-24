@@ -36,7 +36,7 @@ func init() {
 			handlers: map[string]resourceHandler{
 				"mysql_user":     &stubHandler{typeName: "mysql_user"},
 				"mysql_grant":    &stubHandler{typeName: "mysql_grant"},
-				"mysql_role":     &stubHandler{typeName: "mysql_role"},
+				"mysql_role":     &roleHandler{},
 				"mysql_database": &databaseHandler{},
 			},
 		}
