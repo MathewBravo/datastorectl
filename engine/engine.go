@@ -136,6 +136,23 @@ func (e *Engine) plan(ctx context.Context, file *dcl.File, configs map[string]*p
 		return nil, fmt.Errorf("normalize live: %w", err)
 	}
 
+	// 12b. Relabel graph nodes whose Normalize changed ResourceID.Name.
+	// mysql_user and similar providers encode a multi-dimensional
+	// identity tuple (e.g. "user@host") into ID.Name during Normalize.
+	// Without this relabel, OrderPlan correlates graph layers against
+	// plan.Changes using mismatched IDs and silently drops resources
+	// whose Normalize changed their ID. We preserve reference and
+	// type-ordering edges by relabeling in place rather than rebuilding
+	// (reference edges were computed from pre-resolution RefVals that
+	// are no longer present on post-resolution resources).
+	if len(desired) == len(normalizedDesired) {
+		for i := range desired {
+			if desired[i].ID != normalizedDesired[i].ID {
+				graph.RelabelNode(desired[i].ID, normalizedDesired[i].ID)
+			}
+		}
+	}
+
 	// 13. Build full plan.
 	plan := BuildPlan(normalizedDesired, normalizedLive)
 

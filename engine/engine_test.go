@@ -225,6 +225,57 @@ func TestEnginePlan(t *testing.T) {
 		}
 	})
 
+	t.Run("normalize_rewrites_id", func(t *testing.T) {
+		// Regression for #205: when a provider's Normalize rewrites
+		// ResourceID.Name (e.g. mysql_user encoding (user, host) into
+		// "user@host"), the resource must still apply end-to-end. Before
+		// the fix, the dependency graph was built pre-Normalize and
+		// OrderPlan silently dropped resources whose IDs changed.
+		var appliedIDs []provider.ResourceID
+		mock := &mockEngineProvider{
+			normalizeFn: func(_ context.Context, r provider.Resource) (provider.Resource, dcl.Diagnostics) {
+				// Rewrite Name to simulate identity-tuple encoding.
+				r.ID.Name = r.ID.Name + "@normalized"
+				return r, nil
+			},
+			applyFn: func(_ context.Context, _ provider.Operation, r provider.Resource) dcl.Diagnostics {
+				appliedIDs = append(appliedIDs, r.ID)
+				return nil
+			},
+		}
+		provider.Register("engnorm", func() provider.Provider { return mock })
+
+		file := makeFile(
+			provider.ResourceID{Type: "engnorm_role", Name: "alpha"},
+			provider.ResourceID{Type: "engnorm_role", Name: "beta"},
+		)
+
+		e := &Engine{SecretResolver: stubSecretResolver{}}
+		result, err := e.Apply(context.Background(), file, nil, PlanOptions{})
+		if err != nil {
+			t.Fatalf("apply: %v", err)
+		}
+
+		if len(result.Results) != 2 {
+			t.Fatalf("expected 2 apply results, got %d: %+v", len(result.Results), result.Results)
+		}
+		for _, r := range result.Results {
+			if r.Status != StatusSuccess {
+				t.Errorf("expected success for %s, got %s (err=%v)", r.ID, r.Status, r.Error)
+			}
+		}
+
+		// Both applies must have seen the post-Normalize ID form.
+		if len(appliedIDs) != 2 {
+			t.Fatalf("expected 2 applyFn calls, got %d", len(appliedIDs))
+		}
+		for _, id := range appliedIDs {
+			if !strings.HasSuffix(id.Name, "@normalized") {
+				t.Errorf("applyFn saw ID.Name %q without @normalized suffix — Normalize output was bypassed", id.Name)
+			}
+		}
+	})
+
 	t.Run("normalization_affects_diff", func(t *testing.T) {
 		// Normalize uppercases string values. Desired "hello", live "HELLO" →
 		// after normalization both are "HELLO" → ChangeNoOp.
