@@ -72,12 +72,20 @@ jobs:
             exit 1
           fi
 
-      - name: plan --prune shows self-lockout guards
+      - name: plan --prune stays prune-clean (all bootstrap mappings declared)
         run: |
-          output=$(./datastorectl plan --prune testdata/showcase/resources.dcl 2>&1 || true)
-          echo "$output"
-          echo "$output" | grep -Eq "would (lock out|revoke)" \
-            || { echo "expected self-lockout guard output"; exit 1; }
+          # The OpenSearch showcase DCL declares every bootstrap
+          # role_mapping verbatim so --prune is legitimately a no-op.
+          # That's the self-lockout-avoidance design — not a missing
+          # guard. The MySQL job exercises guards fire path instead
+          # (root's grants aren't declared there by design).
+          set +e
+          ./datastorectl plan --prune testdata/showcase/resources.dcl
+          code=$?
+          if [ $code -ne 0 ]; then
+            echo "expected exit code 0 (prune-clean), got $code"
+            exit 1
+          fi
 
       - name: Tear down
         if: always()
@@ -118,10 +126,14 @@ jobs:
 
       - name: Bootstrap datastorectl account
         run: |
+          # Force TCP protocol so we authenticate as root@% (password
+          # auth) rather than root@localhost (socket auth). Default
+          # mysql client goes through unix socket, which on mysql:8.4
+          # matches the root@localhost row and rejects the password.
           sed 's/<REPLACE_ME>/showcase_pw_4rEaDy/' \
               providers/mysql/bootstrap/bootstrap-readwrite.sql \
             | docker exec -i datastorectl-mysql-1 \
-                mysql -uroot -pdatastorectl
+                mysql -h 127.0.0.1 --protocol=TCP -uroot -pdatastorectl
 
       - name: validate
         env:
