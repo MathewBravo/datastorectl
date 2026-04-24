@@ -16,10 +16,19 @@
 --   1. Replace <REPLACE_ME> with a strong password (32+ chars).
 --   2. Review the host pattern '%' — tighten it if your network
 --      policy supports scoping (e.g. '10.0.0.0/8').
---   3. Apply against a fresh cluster or one where no prior
---      'datastorectl' account exists.
+--
+-- This script is idempotent. Re-running it against a cluster that
+-- already has the 'datastorectl' account realigns the password and
+-- TLS requirement; the read and write grants below re-grant cleanly.
 
-CREATE USER 'datastorectl'@'%'
+CREATE USER IF NOT EXISTS 'datastorectl'@'%'
+  IDENTIFIED WITH caching_sha2_password BY '<REPLACE_ME>'
+  REQUIRE SSL;
+
+-- Re-align password, plugin, and REQUIRE clause on every run so the
+-- account state is predictable regardless of what happened in prior
+-- runs. ALTER USER IF EXISTS is a no-op when the account is missing.
+ALTER USER IF EXISTS 'datastorectl'@'%'
   IDENTIFIED WITH caching_sha2_password BY '<REPLACE_ME>'
   REQUIRE SSL;
 

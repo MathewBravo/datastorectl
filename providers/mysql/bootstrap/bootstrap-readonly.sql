@@ -21,8 +21,15 @@
 -- Before running:
 --   1. Replace <REPLACE_ME> with a strong password (32+ chars).
 --   2. Review the host pattern '%' as with the read-write variant.
+--
+-- This script is idempotent; see the note in bootstrap-readwrite.sql
+-- for the CREATE-then-ALTER pattern rationale.
 
-CREATE USER 'datastorectl-ro'@'%'
+CREATE USER IF NOT EXISTS 'datastorectl-ro'@'%'
+  IDENTIFIED WITH caching_sha2_password BY '<REPLACE_ME>'
+  REQUIRE SSL;
+
+ALTER USER IF EXISTS 'datastorectl-ro'@'%'
   IDENTIFIED WITH caching_sha2_password BY '<REPLACE_ME>'
   REQUIRE SSL;
 
