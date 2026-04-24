@@ -186,3 +186,22 @@ func getBodyInt(m *provider.OrderedMap, key string) int {
 	}
 	return int(v.Int)
 }
+
+// getStringListField extracts a list of strings from a resource body.
+// Returns nil when absent or not a list.
+func getStringListField(m *provider.OrderedMap, key string) []string {
+	if m == nil {
+		return nil
+	}
+	v, ok := m.Get(key)
+	if !ok || v.Kind != provider.KindList {
+		return nil
+	}
+	out := make([]string, 0, len(v.List))
+	for _, e := range v.List {
+		if e.Kind == provider.KindString {
+			out = append(out, e.Str)
+		}
+	}
+	return out
+}

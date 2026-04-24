@@ -207,17 +207,3 @@ func resourceWithGrantedRoles(name string, grantedRoles []string) provider.Resou
 	}
 }
 
-// getStringListField extracts a list of strings from a resource body.
-func getStringListField(body *provider.OrderedMap, key string) []string {
-	v, ok := body.Get(key)
-	if !ok || v.Kind != provider.KindList {
-		return nil
-	}
-	out := make([]string, 0, len(v.List))
-	for _, e := range v.List {
-		if e.Kind == provider.KindString {
-			out = append(out, e.Str)
-		}
-	}
-	return out
-}
