@@ -8,12 +8,14 @@ import (
 )
 
 // resourceHandler is the internal interface each resource type implements.
-// The top-level Provider dispatches to the matching handler by resource type.
+// The top-level Provider dispatches to the matching handler by resource
+// type and threads the configured *Client into Discover and Apply
+// (the two paths that actually talk to the server).
 type resourceHandler interface {
-	Discover(ctx context.Context) ([]provider.Resource, error)
+	Discover(ctx context.Context, client *Client) ([]provider.Resource, error)
 	Normalize(ctx context.Context, r provider.Resource) (provider.Resource, error)
 	Validate(ctx context.Context, r provider.Resource) error
-	Apply(ctx context.Context, op provider.Operation, r provider.Resource) error
+	Apply(ctx context.Context, client *Client, op provider.Operation, r provider.Resource) error
 }
 
 // schemaProvider is an optional interface a handler may implement to declare
@@ -34,7 +36,7 @@ type stubHandler struct {
 	typeName string
 }
 
-func (h *stubHandler) Discover(ctx context.Context) ([]provider.Resource, error) {
+func (h *stubHandler) Discover(ctx context.Context, client *Client) ([]provider.Resource, error) {
 	return nil, errNotImplemented
 }
 
@@ -46,6 +48,6 @@ func (h *stubHandler) Validate(ctx context.Context, r provider.Resource) error {
 	return errNotImplemented
 }
 
-func (h *stubHandler) Apply(ctx context.Context, op provider.Operation, r provider.Resource) error {
+func (h *stubHandler) Apply(ctx context.Context, client *Client, op provider.Operation, r provider.Resource) error {
 	return errNotImplemented
 }

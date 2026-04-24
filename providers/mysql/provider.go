@@ -37,7 +37,7 @@ func init() {
 				"mysql_user":     &stubHandler{typeName: "mysql_user"},
 				"mysql_grant":    &stubHandler{typeName: "mysql_grant"},
 				"mysql_role":     &stubHandler{typeName: "mysql_role"},
-				"mysql_database": &stubHandler{typeName: "mysql_database"},
+				"mysql_database": &databaseHandler{},
 			},
 		}
 	})
@@ -314,13 +314,13 @@ func resolveTLSField(config *provider.OrderedMap) (string, dcl.Diagnostics) {
 }
 
 // Discover iterates registered handlers and collects any discovered
-// resources. In the scaffold every handler errors, so this returns an
-// aggregated diagnostics list.
+// resources. Each handler receives the shared client configured at
+// Configure time.
 func (p *Provider) Discover(ctx context.Context) ([]provider.Resource, dcl.Diagnostics) {
 	var all []provider.Resource
 	var diags dcl.Diagnostics
 	for _, h := range p.handlers {
-		resources, err := h.Discover(ctx)
+		resources, err := h.Discover(ctx, p.client)
 		if err != nil {
 			diags = append(diags, dcl.Diagnostic{Severity: dcl.SeverityError, Message: err.Error()})
 			continue
@@ -370,7 +370,7 @@ func (p *Provider) Apply(ctx context.Context, op provider.Operation, r provider.
 			Message:  fmt.Sprintf("resource type %q is not supported by the mysql provider", r.ID.Type),
 		}}
 	}
-	if err := h.Apply(ctx, op, r); err != nil {
+	if err := h.Apply(ctx, p.client, op, r); err != nil {
 		return dcl.Diagnostics{{Severity: dcl.SeverityError, Message: err.Error()}}
 	}
 	return nil
