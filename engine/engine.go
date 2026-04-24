@@ -136,6 +136,18 @@ func (e *Engine) plan(ctx context.Context, file *dcl.File, configs map[string]*p
 		return nil, fmt.Errorf("normalize live: %w", err)
 	}
 
+	// 12a. Cross-resource validation. Providers that implement
+	// CrossResourceValidator see the normalized desired set scoped to
+	// the resource types they own. This catches classes of
+	// misconfiguration that per-resource Validate cannot express —
+	// e.g. two mysql_user blocks whose Normalize collapses them to the
+	// same (user, host) identity, or a mysql_user/mysql_role pair that
+	// map to the same MySQL 8 server row. Error diagnostics abort the
+	// pipeline before diff.
+	if err := validateCrossResources(ctx, normalizedDesired, providers); err != nil {
+		return nil, err
+	}
+
 	// 12b. Relabel graph nodes whose Normalize changed ResourceID.Name.
 	// mysql_user and similar providers encode a multi-dimensional
 	// identity tuple (e.g. "user@host") into ID.Name during Normalize.
@@ -273,6 +285,43 @@ func (e *Engine) DryRun(ctx context.Context, file *dcl.File, configs map[string]
 		return nil, err
 	}
 	return result.plan, nil
+}
+
+// validateCrossResources groups the normalized desired resources by their
+// owning provider and invokes CrossResourceValidator on each provider that
+// implements it. Resources whose type has no registered provider (should
+// not happen after ConfigureProviders) are skipped silently.
+//
+// Returns a formatted error when any provider returns error-severity
+// diagnostics. Warning-only diagnostics are dropped — the current pipeline
+// has no surface for plan-time warnings; adding one is a separate change.
+func validateCrossResources(ctx context.Context, resources []provider.Resource, providers map[string]provider.Provider) error {
+	byProvider := make(map[provider.Provider][]provider.Resource)
+	order := make([]provider.Provider, 0)
+	for _, r := range resources {
+		p, ok := providers[r.ID.Type]
+		if !ok {
+			continue
+		}
+		if _, seen := byProvider[p]; !seen {
+			order = append(order, p)
+		}
+		byProvider[p] = append(byProvider[p], r)
+	}
+
+	var allDiags dcl.Diagnostics
+	for _, p := range order {
+		v, ok := p.(provider.CrossResourceValidator)
+		if !ok {
+			continue
+		}
+		diags := v.ValidateResources(ctx, byProvider[p])
+		allDiags = append(allDiags, diags...)
+	}
+	if allDiags.HasErrors() {
+		return fmt.Errorf("cross-resource validation: %s", allDiags.Error())
+	}
+	return nil
 }
 
 // validateResources calls Validate on each create/update change in the plan.

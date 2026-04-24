@@ -23,8 +23,9 @@ type roleHandler struct{}
 const roleHost = "%"
 
 // Validate covers the per-resource rules that don't need a cluster.
-// Cross-resource checks (e.g. role name colliding with a mysql_user
-// in the same config) are a future engine-level concern.
+// Cross-resource name-collision checks (mysql_role vs mysql_user both
+// targeting the same (name, "%") row) live on the provider's
+// ValidateResources — see cross_validate.go.
 func (h *roleHandler) Validate(_ context.Context, r provider.Resource) error {
 	name := r.ID.Name
 	if name == "" {

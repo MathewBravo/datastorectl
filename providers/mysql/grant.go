@@ -19,9 +19,11 @@ type grantHandler struct {
 	version string
 }
 
-// Validate covers per-resource rules. Cross-resource duplicate-tuple
-// checks are a known gap, tracked in the engine-level cross-resource
-// validation issue.
+// Validate covers per-resource rules. User/role identity collisions
+// across blocks are handled by the provider's ValidateResources hook
+// (see cross_validate.go); grant-specific cross-resource checks (e.g.
+// a grant referencing a user/role the config does not declare) are not
+// yet implemented.
 func (h *grantHandler) Validate(_ context.Context, r provider.Resource) error {
 	user := getBodyString(r.Body, "user")
 	host := getBodyString(r.Body, "host")
