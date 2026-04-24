@@ -7,16 +7,35 @@ import (
 )
 
 // GrantStmt is the parsed shape of a single GRANT DDL statement from
-// SHOW GRANTS output. Identity is the (User, Host, Database, Table)
-// tuple. Privileges are uppercased and sorted for deterministic diffs.
+// SHOW GRANTS output. Privilege grants populate (Privileges, Database,
+// Table); role grants populate GrantedRoles and leave Privileges empty.
+// User and Host always identify the recipient.
 type GrantStmt struct {
-	Privileges  []string // sorted, uppercased; "ALL" stands alone
-	Database    string   // "*" for global scope, or schema name
-	Table       string   // "*" for schema-level, or table name
+	Privileges  []string // sorted, uppercased; "ALL" stands alone (privilege grants only)
+	Database    string   // "*" for global scope, or schema name (privilege grants only)
+	Table       string   // "*" for schema-level, or table name (privilege grants only)
 	User        string
 	Host        string
 	GrantOption bool
+
+	// Role-grant-only fields. Populated when the GRANT is a role grant
+	// (GRANT <role> TO <user>) rather than a privilege grant. MySQL 8
+	// stores roles as users so these are standard on any cluster using
+	// roles — including every RDS Aurora master user.
+	GrantedRoles []RoleRef `json:",omitempty"`
+	AdminOption  bool      `json:",omitempty"`
 }
+
+// RoleRef is a (name, host) pair naming a role granted to a user.
+type RoleRef struct {
+	Name string
+	Host string
+}
+
+// IsRoleGrant reports whether this statement is a role-to-user grant
+// (as opposed to a privilege grant). Callers use this to decide whether
+// to treat the statement as mysql_grant state or skip it.
+func (s GrantStmt) IsRoleGrant() bool { return len(s.GrantedRoles) > 0 }
 
 // ParseGrant parses a single GRANT statement. The version argument is
 // reserved for version-specific tolerance knobs; currently unused
@@ -90,6 +109,18 @@ func (p *grantParser) parse() (GrantStmt, error) {
 		return GrantStmt{}, err
 	}
 
+	// Role-grant detection: after GRANT, a role reference is a
+	// backtick- or single-quote-quoted identifier, while a privilege
+	// is always a bare ident (SELECT, ALL, PROCESS, REPLICATION CLIENT,
+	// ...). Peek one token; a quoted identifier means role grant.
+	t, err := p.peek()
+	if err != nil {
+		return GrantStmt{}, err
+	}
+	if t.Kind == tkBacktick || t.Kind == tkString {
+		return p.parseRoleGrant()
+	}
+
 	privs, err := p.readPrivileges()
 	if err != nil {
 		return GrantStmt{}, err
@@ -100,7 +131,7 @@ func (p *grantParser) parse() (GrantStmt, error) {
 	}
 
 	// Reject routine scopes early with a specific diagnostic.
-	t, err := p.peek()
+	t, err = p.peek()
 	if err != nil {
 		return GrantStmt{}, err
 	}
@@ -173,6 +204,109 @@ func (p *grantParser) parse() (GrantStmt, error) {
 	}
 
 	return stmt, nil
+}
+
+// parseRoleGrant consumes the role-to-user form:
+//
+//	GRANT `role`@`host`[, `role`@`host`...] TO `user`@`host` [WITH ADMIN OPTION]
+//
+// Called after the leading GRANT keyword has been consumed and a quoted
+// identifier has been peeked. Populates GrantedRoles, AdminOption, User,
+// and Host; Privileges/Database/Table stay empty.
+func (p *grantParser) parseRoleGrant() (GrantStmt, error) {
+	var roles []RoleRef
+	for {
+		role, err := p.readRoleRef()
+		if err != nil {
+			return GrantStmt{}, err
+		}
+		roles = append(roles, role)
+		t, err := p.peek()
+		if err != nil {
+			return GrantStmt{}, err
+		}
+		if t.Kind != tkComma {
+			break
+		}
+		_, _ = p.next() // consume comma
+	}
+
+	if err := p.expectKeyword("TO"); err != nil {
+		return GrantStmt{}, err
+	}
+	user, err := p.readQuotedName()
+	if err != nil {
+		return GrantStmt{}, err
+	}
+	at, err := p.next()
+	if err != nil {
+		return GrantStmt{}, err
+	}
+	if at.Kind != tkAt {
+		return GrantStmt{}, fmt.Errorf("parse: expected '@' between user and host in role grant, got %s", at)
+	}
+	host, err := p.readQuotedName()
+	if err != nil {
+		return GrantStmt{}, err
+	}
+
+	stmt := GrantStmt{
+		User:         user,
+		Host:         host,
+		GrantedRoles: roles,
+	}
+
+	// Optional WITH ADMIN OPTION trailer.
+	t, err := p.peek()
+	if err != nil {
+		return GrantStmt{}, err
+	}
+	if matchIdent(t, "WITH") {
+		_, _ = p.next()
+		if err := p.expectKeyword("ADMIN"); err != nil {
+			return GrantStmt{}, fmt.Errorf("parse: WITH on a role grant must be followed by ADMIN OPTION: %w", err)
+		}
+		if err := p.expectKeyword("OPTION"); err != nil {
+			return GrantStmt{}, err
+		}
+		stmt.AdminOption = true
+	}
+
+	// Tolerate a trailing semicolon.
+	t, err = p.peek()
+	if err == nil && t.Kind == tkSemi {
+		_, _ = p.next()
+	}
+	t, err = p.peek()
+	if err != nil {
+		return GrantStmt{}, err
+	}
+	if t.Kind != tkEOF {
+		return GrantStmt{}, fmt.Errorf("parse: unexpected trailing token in role grant %s", t)
+	}
+
+	return stmt, nil
+}
+
+// readRoleRef consumes one `name`@`host` (or 'name'@'host') role
+// reference and returns it.
+func (p *grantParser) readRoleRef() (RoleRef, error) {
+	name, err := p.readQuotedName()
+	if err != nil {
+		return RoleRef{}, err
+	}
+	at, err := p.next()
+	if err != nil {
+		return RoleRef{}, err
+	}
+	if at.Kind != tkAt {
+		return RoleRef{}, fmt.Errorf("parse: expected '@' in role reference, got %s", at)
+	}
+	host, err := p.readQuotedName()
+	if err != nil {
+		return RoleRef{}, err
+	}
+	return RoleRef{Name: name, Host: host}, nil
 }
 
 // readPrivileges consumes the comma-separated privilege list up to

@@ -216,6 +216,13 @@ func (h *grantHandler) fetchAndParseGrants(ctx context.Context, db *sql.DB, user
 			}
 			return nil, fmt.Errorf("parse grant line %q: %w", line, err)
 		}
+		// Role-to-user grants (GRANT `role` TO `user`) share the SHOW
+		// GRANTS output with privilege grants but don't map onto
+		// mysql_grant. Skip them; a future mysql_role_grant resource
+		// can consume the parsed form.
+		if s.IsRoleGrant() {
+			continue
+		}
 		out = append(out, s)
 	}
 	return out, nil
