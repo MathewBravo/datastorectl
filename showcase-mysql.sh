@@ -14,8 +14,12 @@ case "${1:-help}" in
     echo "Cluster is ready."
     echo ""
     echo "Provisioning the datastorectl management account..."
+    # stderr is intentionally NOT suppressed here — bootstrap failures
+    # surface as silent auth errors later when plan tries to connect.
+    # The "Using a password on the command line" warning is expected
+    # and harmless; real errors are actual SQL failures.
     sed "s/<REPLACE_ME>/${BOOTSTRAP_PW}/" providers/mysql/bootstrap/bootstrap-readwrite.sql \
-      | docker exec -i datastorectl-mysql-1 mysql -uroot -pdatastorectl 2>/dev/null
+      | docker exec -i datastorectl-mysql-1 mysql -uroot -pdatastorectl
     echo "Bootstrap applied."
     echo ""
     echo "Building datastorectl..."
