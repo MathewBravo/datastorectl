@@ -57,3 +57,44 @@ func (g *Graph) DependsOn(id provider.ResourceID) []provider.ResourceID {
 func (g *Graph) DependedOnBy(id provider.ResourceID) []provider.ResourceID {
 	return g.reverse[id]
 }
+
+// RelabelNode renames a node while preserving every edge that touches
+// it. Used when a provider's Normalize rewrites ResourceID.Name so the
+// plan's post-Normalize IDs stay wired to the graph built from
+// reference-resolution-time IDs. No-op when old == new. No-op when
+// old is not registered.
+func (g *Graph) RelabelNode(old, new provider.ResourceID) {
+	if old == new {
+		return
+	}
+	if _, ok := g.nodes[old]; !ok {
+		return
+	}
+	delete(g.nodes, old)
+	g.nodes[new] = struct{}{}
+
+	// Forward edges: old → *.
+	deps := g.forward[old]
+	delete(g.forward, old)
+	g.forward[new] = deps
+	// Update reverse pointers that referenced `old` as a dependent.
+	for _, dep := range deps {
+		for i, parent := range g.reverse[dep] {
+			if parent == old {
+				g.reverse[dep][i] = new
+			}
+		}
+	}
+
+	// Reverse edges: * → old.
+	dependents := g.reverse[old]
+	delete(g.reverse, old)
+	g.reverse[new] = dependents
+	for _, dep := range dependents {
+		for i, child := range g.forward[dep] {
+			if child == old {
+				g.forward[dep][i] = new
+			}
+		}
+	}
+}
