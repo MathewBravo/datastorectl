@@ -34,7 +34,7 @@ func init() {
 	provider.Register("mysql", func() provider.Provider {
 		return &Provider{
 			handlers: map[string]resourceHandler{
-				"mysql_user":     &stubHandler{typeName: "mysql_user"},
+				"mysql_user":     &userHandler{},
 				"mysql_grant":    &stubHandler{typeName: "mysql_grant"},
 				"mysql_role":     &roleHandler{},
 				"mysql_database": &databaseHandler{},
