@@ -1,6 +1,7 @@
 package mysql
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"database/sql"
@@ -9,6 +10,8 @@ import (
 	"strings"
 	"sync/atomic"
 
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/feature/rds/auth"
 	"github.com/go-sql-driver/mysql"
 )
 
@@ -142,4 +145,67 @@ func HostFromEndpoint(endpoint string) string {
 		return endpoint[:i]
 	}
 	return endpoint
+}
+
+// RDSIAMConfig captures everything NewRDSIAMClient needs from the
+// resolved provider block.
+type RDSIAMConfig struct {
+	Endpoint   string // host:port
+	Username   string // IAM-enabled DB user
+	Region     string // AWS region
+	AWSProfile string // optional shared-config profile
+	TLS        string // "required" | "skip-verify" (disabled is rejected upstream)
+	TLSCA      string
+	TLSCert    string
+	TLSKey     string
+}
+
+// NewRDSIAMClient loads AWS credentials via the standard chain (or the
+// specified shared-config profile), generates a short-lived IAM auth
+// token for the given RDS endpoint + username, and opens a *sql.DB
+// using the token as the password. TLS is mandatory and always
+// applied; RDS requires it and the caller layer forbids disabling it.
+func NewRDSIAMClient(ctx context.Context, cfg RDSIAMConfig) (*Client, error) {
+	opts := []func(*awsconfig.LoadOptions) error{
+		awsconfig.WithRegion(cfg.Region),
+	}
+	if cfg.AWSProfile != "" {
+		opts = append(opts, awsconfig.WithSharedConfigProfile(cfg.AWSProfile))
+	}
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("load AWS credentials: %w", err)
+	}
+
+	token, err := auth.BuildAuthToken(ctx, cfg.Endpoint, cfg.Region, cfg.Username, awsCfg.Credentials)
+	if err != nil {
+		return nil, fmt.Errorf("generate RDS IAM auth token: %w", err)
+	}
+
+	driverCfg := mysql.NewConfig()
+	driverCfg.User = cfg.Username
+	driverCfg.Passwd = token
+	driverCfg.Net = "tcp"
+	driverCfg.Addr = cfg.Endpoint
+	driverCfg.AllowCleartextPasswords = true // IAM token is cleartext over TLS
+
+	tlsMode := cfg.TLS
+	if tlsMode == "" {
+		tlsMode = "required"
+	}
+	if err := applyTLSConfig(driverCfg, tlsMode, ClientConfig{
+		TLSCA:   cfg.TLSCA,
+		TLSCert: cfg.TLSCert,
+		TLSKey:  cfg.TLSKey,
+	}); err != nil {
+		return nil, err
+	}
+
+	db, err := sql.Open("mysql", driverCfg.FormatDSN())
+	if err != nil {
+		return nil, fmt.Errorf("opening mysql connection: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	return &Client{db: db}, nil
 }
