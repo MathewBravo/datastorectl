@@ -164,3 +164,25 @@ func getBodyString(m *provider.OrderedMap, key string) string {
 	}
 	return v.Str
 }
+
+// getBodyBool retrieves a bool attribute from a resource body.
+func getBodyBool(m *provider.OrderedMap, key string) bool {
+	if m == nil {
+		return false
+	}
+	v, ok := m.Get(key)
+	return ok && v.Kind == provider.KindBool && v.Bool
+}
+
+// getBodyInt retrieves an int attribute from a resource body as a
+// Go int, returning 0 when absent or not an integer kind.
+func getBodyInt(m *provider.OrderedMap, key string) int {
+	if m == nil {
+		return 0
+	}
+	v, ok := m.Get(key)
+	if !ok || v.Kind != provider.KindInt {
+		return 0
+	}
+	return int(v.Int)
+}
