@@ -198,6 +198,102 @@ func TestParseGrant_SingleQuotedIdents(t *testing.T) {
 	}
 }
 
+// TestParseGrant_RoleGrantAurora exercises the exact shape AWS RDS
+// Aurora's SHOW GRANTS emits for its master `admin` user. Role-to-user
+// grants have no privilege names and no ON clause. Surfaced by #201;
+// tracked in #215.
+func TestParseGrant_RoleGrantAurora(t *testing.T) {
+	stmt, err := ParseGrant("GRANT `rds_superuser_role`@`%` TO `admin`@`%`", "8.0")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !stmt.IsRoleGrant() {
+		t.Error("IsRoleGrant() = false, want true")
+	}
+	if len(stmt.Privileges) != 0 {
+		t.Errorf("Privileges = %v, want empty for role grant", stmt.Privileges)
+	}
+	if len(stmt.GrantedRoles) != 1 {
+		t.Fatalf("GrantedRoles length = %d, want 1", len(stmt.GrantedRoles))
+	}
+	got := stmt.GrantedRoles[0]
+	if got.Name != "rds_superuser_role" || got.Host != "%" {
+		t.Errorf("GrantedRoles[0] = %+v, want {rds_superuser_role %%}", got)
+	}
+	if stmt.User != "admin" || stmt.Host != "%" {
+		t.Errorf("recipient = %q@%q, want admin@%%", stmt.User, stmt.Host)
+	}
+}
+
+// TestParseGrant_RoleGrantMultiple covers comma-separated roles.
+func TestParseGrant_RoleGrantMultiple(t *testing.T) {
+	stmt, err := ParseGrant("GRANT `reader`@`%`, `writer`@`%` TO `alice`@`10.0.%`", "8.0")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !stmt.IsRoleGrant() {
+		t.Error("IsRoleGrant() = false, want true")
+	}
+	if len(stmt.GrantedRoles) != 2 {
+		t.Fatalf("GrantedRoles length = %d, want 2: %+v", len(stmt.GrantedRoles), stmt.GrantedRoles)
+	}
+	if stmt.GrantedRoles[0].Name != "reader" || stmt.GrantedRoles[1].Name != "writer" {
+		t.Errorf("GrantedRoles names = %+v", stmt.GrantedRoles)
+	}
+}
+
+// TestParseGrant_RoleGrantWithAdminOption covers the WITH ADMIN OPTION
+// trailer that MySQL 8 allows on role grants (symmetric with WITH GRANT
+// OPTION on privilege grants).
+func TestParseGrant_RoleGrantWithAdminOption(t *testing.T) {
+	stmt, err := ParseGrant("GRANT `admin_role`@`%` TO `ops`@`%` WITH ADMIN OPTION", "8.0")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !stmt.IsRoleGrant() {
+		t.Error("IsRoleGrant() = false, want true")
+	}
+	if !stmt.AdminOption {
+		t.Error("AdminOption = false, want true")
+	}
+}
+
+// TestParseGrant_PrivilegeGrantUnchanged is a regression check: the
+// existing privilege-grant paths must stay exactly as before — no
+// GrantedRoles populated, IsRoleGrant() false.
+func TestParseGrant_PrivilegeGrantUnchanged(t *testing.T) {
+	stmt, err := ParseGrant("GRANT SELECT ON `appdb`.* TO `app`@`%`", "8.0")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if stmt.IsRoleGrant() {
+		t.Error("IsRoleGrant() = true on a privilege grant")
+	}
+	if len(stmt.GrantedRoles) != 0 {
+		t.Errorf("GrantedRoles = %+v, want empty on a privilege grant", stmt.GrantedRoles)
+	}
+}
+
+// TestParseGrantLines_MixedPrivilegeAndRole confirms ParseGrantLines
+// returns both forms interleaved without error, preserving line order.
+func TestParseGrantLines_MixedPrivilegeAndRole(t *testing.T) {
+	output := "GRANT USAGE ON *.* TO `admin`@`%`\n" +
+		"GRANT `rds_superuser_role`@`%` TO `admin`@`%`"
+	stmts, err := ParseGrantLines(output, "8.0")
+	if err != nil {
+		t.Fatalf("ParseGrantLines: %v", err)
+	}
+	if len(stmts) != 2 {
+		t.Fatalf("got %d stmts, want 2", len(stmts))
+	}
+	if stmts[0].IsRoleGrant() {
+		t.Error("first line should be a privilege grant")
+	}
+	if !stmts[1].IsRoleGrant() {
+		t.Error("second line should be a role grant")
+	}
+}
+
 // equalStringSlices compares two string slices in order.
 func equalStringSlices(a, b []string) bool {
 	if len(a) != len(b) {
