@@ -1,7 +1,7 @@
 context "demo" {
   provider = mysql
   version  = "8.4"
-  endpoint = "localhost:3306"
+  endpoint = "localhost:3308"
   auth     = "password"
   username = "datastorectl"
   password = secret("env", "DATASTORECTL_MYSQL_PASSWORD")

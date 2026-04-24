@@ -132,13 +132,14 @@ jobs:
       - name: Bootstrap datastorectl account
         run: |
           # Run the mysql client on the runner against the
-          # port-forwarded 3306. This authenticates as root@<runner-IP>
-          # which matches root@% (password auth). Running the client
-          # inside the container matches root@localhost (socket auth)
-          # and rejects the password — that's why we don't docker exec.
+          # port-forwarded host port. This authenticates as
+          # root@<runner-IP> which matches root@% (password auth).
+          # Running the client inside the container matches
+          # root@localhost (socket auth) and rejects the password —
+          # that's why we don't docker exec.
           sed 's/<REPLACE_ME>/showcase_pw_4rEaDy/' \
               providers/mysql/bootstrap/bootstrap-readwrite.sql \
-            | mysql -h 127.0.0.1 -P 3306 -uroot -pdatastorectl
+            | mysql -h 127.0.0.1 -P 3308 -uroot -pdatastorectl
 
       - name: validate
         env:

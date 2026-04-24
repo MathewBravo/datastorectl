@@ -22,7 +22,9 @@ docker compose -f docker-compose.mysql.yml down
 The fixture brings up a single `mysql:8.4` node with:
 - root password `datastorectl`
 - root accessible from any host (`MYSQL_ROOT_HOST=%`)
-- port `3306` exposed on the host
+- port `3308` exposed on the host (container port stays `3306`; the
+  host-side remap avoids conflicts with a locally-installed MySQL or
+  another dev project's `mysql` container)
 
 TLS uses the server-generated self-signed certs that ship with the
 image. Integration tests connect with `tls = "skip-verify"` to
