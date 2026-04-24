@@ -296,7 +296,7 @@ func (p *Provider) configureRDSIAMAuth(ctx context.Context, endpoint, tlsMode st
 		return dcl.Diagnostics{{
 			Severity:   dcl.SeverityError,
 			Message:    fmt.Sprintf("mysql rds_iam connection check failed: %s", err),
-			Suggestion: "verify the RDS endpoint is reachable, the IAM user is enabled on the DB, and TLS is accepted",
+			Suggestion: rdsIAMPingSuggestion(err),
 		}}
 	}
 
