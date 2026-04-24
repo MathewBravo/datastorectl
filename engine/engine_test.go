@@ -1053,6 +1053,138 @@ func (m *mockOrderingProvider) TypeOrderings() []provider.TypeOrdering {
 	return m.orderings
 }
 
+// crossValidatingProvider is a mockEngineProvider that also implements
+// provider.CrossResourceValidator.
+type crossValidatingProvider struct {
+	mockEngineProvider
+	crossValidateFn func(ctx context.Context, resources []provider.Resource) dcl.Diagnostics
+	sawResources    []provider.Resource
+}
+
+func (c *crossValidatingProvider) ValidateResources(ctx context.Context, resources []provider.Resource) dcl.Diagnostics {
+	c.sawResources = resources
+	if c.crossValidateFn != nil {
+		return c.crossValidateFn(ctx, resources)
+	}
+	return nil
+}
+
+func TestEngine_CrossResourceValidation(t *testing.T) {
+	t.Run("blocks_plan_on_error_diagnostic", func(t *testing.T) {
+		mock := &crossValidatingProvider{
+			crossValidateFn: func(_ context.Context, _ []provider.Resource) dcl.Diagnostics {
+				return dcl.Diagnostics{{
+					Severity: dcl.SeverityError,
+					Message:  "two resources collide on identity",
+				}}
+			},
+		}
+		provider.Register("xrv1", func() provider.Provider { return mock })
+
+		file := makeFile(
+			provider.ResourceID{Type: "xrv1_svc", Name: "a"},
+			provider.ResourceID{Type: "xrv1_svc", Name: "b"},
+		)
+
+		e := &Engine{SecretResolver: stubSecretResolver{}}
+		_, _, err := e.Plan(context.Background(), file, nil, PlanOptions{})
+		if err == nil {
+			t.Fatal("expected cross-resource validation error to block plan")
+		}
+		if !strings.Contains(err.Error(), "two resources collide") {
+			t.Errorf("expected diagnostic message in error, got: %s", err.Error())
+		}
+	})
+
+	t.Run("sees_post_normalize_ids", func(t *testing.T) {
+		mock := &crossValidatingProvider{
+			mockEngineProvider: mockEngineProvider{
+				normalizeFn: func(_ context.Context, r provider.Resource) (provider.Resource, dcl.Diagnostics) {
+					r.ID.Name = r.ID.Name + "@normalized"
+					return r, nil
+				},
+			},
+		}
+		provider.Register("xrv2", func() provider.Provider { return mock })
+
+		file := makeFile(
+			provider.ResourceID{Type: "xrv2_svc", Name: "alpha"},
+			provider.ResourceID{Type: "xrv2_svc", Name: "beta"},
+		)
+
+		e := &Engine{SecretResolver: stubSecretResolver{}}
+		if _, _, err := e.Plan(context.Background(), file, nil, PlanOptions{}); err != nil {
+			t.Fatalf("unexpected plan error: %v", err)
+		}
+		if len(mock.sawResources) != 2 {
+			t.Fatalf("expected 2 resources passed to ValidateResources, got %d", len(mock.sawResources))
+		}
+		for _, r := range mock.sawResources {
+			if !strings.HasSuffix(r.ID.Name, "@normalized") {
+				t.Errorf("ValidateResources saw pre-normalize ID %q; expected @normalized suffix", r.ID.Name)
+			}
+		}
+	})
+
+	t.Run("warnings_do_not_block_plan", func(t *testing.T) {
+		mock := &crossValidatingProvider{
+			crossValidateFn: func(_ context.Context, _ []provider.Resource) dcl.Diagnostics {
+				return dcl.Diagnostics{{
+					Severity: dcl.SeverityWarning,
+					Message:  "heads-up",
+				}}
+			},
+		}
+		provider.Register("xrv3", func() provider.Provider { return mock })
+
+		file := makeFile(provider.ResourceID{Type: "xrv3_svc", Name: "a"})
+
+		e := &Engine{SecretResolver: stubSecretResolver{}}
+		if _, _, err := e.Plan(context.Background(), file, nil, PlanOptions{}); err != nil {
+			t.Errorf("warnings must not block plan, got: %v", err)
+		}
+	})
+
+	t.Run("provider_without_interface_is_skipped", func(t *testing.T) {
+		// Plain mockEngineProvider does not implement CrossResourceValidator.
+		// Pipeline must proceed without error.
+		mock := &mockEngineProvider{}
+		provider.Register("xrv4", func() provider.Provider { return mock })
+
+		file := makeFile(provider.ResourceID{Type: "xrv4_svc", Name: "a"})
+
+		e := &Engine{SecretResolver: stubSecretResolver{}}
+		if _, _, err := e.Plan(context.Background(), file, nil, PlanOptions{}); err != nil {
+			t.Errorf("provider without CrossResourceValidator must not break plan: %v", err)
+		}
+	})
+
+	t.Run("resources_scoped_to_owning_provider", func(t *testing.T) {
+		// Two providers, each owning a different resource type. The
+		// cross-validator should only see resources for types it owns.
+		mockA := &crossValidatingProvider{}
+		mockB := &mockEngineProvider{}
+		provider.Register("xrva", func() provider.Provider { return mockA })
+		provider.Register("xrvb", func() provider.Provider { return mockB })
+
+		file := makeFile(
+			provider.ResourceID{Type: "xrva_svc", Name: "1"},
+			provider.ResourceID{Type: "xrvb_svc", Name: "2"},
+		)
+
+		e := &Engine{SecretResolver: stubSecretResolver{}}
+		if _, _, err := e.Plan(context.Background(), file, nil, PlanOptions{}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(mockA.sawResources) != 1 {
+			t.Fatalf("expected 1 resource for provider A, got %d", len(mockA.sawResources))
+		}
+		if mockA.sawResources[0].ID.Type != "xrva_svc" {
+			t.Errorf("provider A saw foreign type %q", mockA.sawResources[0].ID.Type)
+		}
+	})
+}
+
 func TestEnginePlan_TypeOrderings(t *testing.T) {
 	t.Run("provider_orderings_create_graph_edges", func(t *testing.T) {
 		mock := &mockOrderingProvider{

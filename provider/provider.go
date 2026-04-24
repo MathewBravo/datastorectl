@@ -87,3 +87,22 @@ type TypeOrderer interface {
 type ResourceDiffer interface {
 	Equal(ctx context.Context, desired, live Resource) (bool, dcl.Diagnostics)
 }
+
+// CrossResourceValidator is an optional interface a Provider may implement
+// to run validation checks that span multiple resources. The engine calls
+// ValidateResources once per provider after Normalize (so ID.Name is in
+// canonical form) and before the plan is built, passing only the desired
+// resources whose types this provider owns.
+//
+// The canonical case is the MySQL provider catching two kinds of
+// misconfiguration that per-resource Validate cannot see: two mysql_user
+// blocks with different DCL labels but identical (user, host) tuples, and
+// a mysql_user/mysql_role pair that collapses to the same MySQL 8 server
+// row. Both surface at apply time as raw MySQL errors; catching them at
+// plan time with source-ranged diagnostics is much friendlier.
+//
+// Returning diagnostics with error severity aborts the pipeline before
+// diff. Warnings surface in the plan without blocking.
+type CrossResourceValidator interface {
+	ValidateResources(ctx context.Context, resources []Resource) dcl.Diagnostics
+}
