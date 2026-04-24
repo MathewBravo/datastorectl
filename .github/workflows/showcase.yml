@@ -1,0 +1,181 @@
+name: showcase
+
+# End-to-end showcase tests: bring up each provider's Docker fixture,
+# run the full validate → plan (drift) → apply → plan (convergence)
+# sequence, and verify the self-lockout guard fires on --prune. Each
+# provider runs in its own job so they execute in parallel and one
+# flaky dep doesn't mask the other.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  opensearch:
+    name: OpenSearch showcase
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build datastorectl
+        run: go build -o datastorectl ./cmd/datastorectl
+
+      - name: Start OpenSearch
+        run: docker compose up -d
+
+      - name: Wait for cluster healthy
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sk https://localhost:9200/_cluster/health \
+                 -u admin:myStrongPassword123! | grep -q '"status"'; then
+              echo "opensearch is ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "opensearch did not become healthy in time"
+          docker compose logs
+          exit 1
+
+      - name: validate
+        run: ./datastorectl validate testdata/showcase/resources.dcl
+
+      - name: plan (drift expected)
+        run: |
+          set +e
+          ./datastorectl plan testdata/showcase/resources.dcl
+          code=$?
+          if [ $code -ne 2 ]; then
+            echo "expected exit code 2 (drift detected), got $code"
+            exit 1
+          fi
+
+      - name: apply
+        run: ./datastorectl apply testdata/showcase/resources.dcl
+
+      - name: plan (convergence)
+        run: |
+          set +e
+          ./datastorectl plan testdata/showcase/resources.dcl
+          code=$?
+          if [ $code -ne 0 ]; then
+            echo "expected exit code 0 (no changes), got $code"
+            exit 1
+          fi
+
+      - name: plan --prune shows self-lockout guards
+        run: |
+          output=$(./datastorectl plan --prune testdata/showcase/resources.dcl 2>&1 || true)
+          echo "$output"
+          echo "$output" | grep -Eq "would (lock out|revoke)" \
+            || { echo "expected self-lockout guard output"; exit 1; }
+
+      - name: Tear down
+        if: always()
+        run: docker compose down
+
+  mysql:
+    name: MySQL showcase
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build datastorectl
+        run: go build -o datastorectl ./cmd/datastorectl
+
+      - name: Start MySQL
+        run: docker compose -f docker-compose.mysql.yml up -d
+
+      - name: Wait for server healthy
+        run: |
+          for i in $(seq 1 60); do
+            if docker exec datastorectl-mysql-1 mysqladmin ping \
+                 -h localhost -uroot -pdatastorectl --silent 2>/dev/null; then
+              echo "mysql is ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "mysql did not become healthy in time"
+          docker compose -f docker-compose.mysql.yml logs
+          exit 1
+
+      - name: Bootstrap datastorectl account
+        run: |
+          sed 's/<REPLACE_ME>/showcase_pw_4rEaDy/' \
+              providers/mysql/bootstrap/bootstrap-readwrite.sql \
+            | docker exec -i datastorectl-mysql-1 \
+                mysql -uroot -pdatastorectl
+
+      - name: validate
+        env:
+          DATASTORECTL_MYSQL_PASSWORD: showcase_pw_4rEaDy
+          DATASTORECTL_MYSQL_APP_PW: app_demo_pw
+          DATASTORECTL_MYSQL_OPS_PW: ops_demo_pw
+        run: ./datastorectl validate testdata/showcase-mysql/resources.dcl
+
+      - name: plan (drift expected)
+        env:
+          DATASTORECTL_MYSQL_PASSWORD: showcase_pw_4rEaDy
+          DATASTORECTL_MYSQL_APP_PW: app_demo_pw
+          DATASTORECTL_MYSQL_OPS_PW: ops_demo_pw
+        run: |
+          set +e
+          ./datastorectl plan testdata/showcase-mysql/resources.dcl
+          code=$?
+          if [ $code -ne 2 ]; then
+            echo "expected exit code 2 (drift detected), got $code"
+            exit 1
+          fi
+
+      - name: apply
+        env:
+          DATASTORECTL_MYSQL_PASSWORD: showcase_pw_4rEaDy
+          DATASTORECTL_MYSQL_APP_PW: app_demo_pw
+          DATASTORECTL_MYSQL_OPS_PW: ops_demo_pw
+        run: ./datastorectl apply testdata/showcase-mysql/resources.dcl
+
+      - name: plan (convergence)
+        env:
+          DATASTORECTL_MYSQL_PASSWORD: showcase_pw_4rEaDy
+          DATASTORECTL_MYSQL_APP_PW: app_demo_pw
+          DATASTORECTL_MYSQL_OPS_PW: ops_demo_pw
+        run: |
+          set +e
+          ./datastorectl plan testdata/showcase-mysql/resources.dcl
+          code=$?
+          if [ $code -ne 0 ]; then
+            echo "expected exit code 0 (no changes), got $code"
+            exit 1
+          fi
+
+      - name: plan --prune shows self-lockout guards
+        env:
+          DATASTORECTL_MYSQL_PASSWORD: showcase_pw_4rEaDy
+          DATASTORECTL_MYSQL_APP_PW: app_demo_pw
+          DATASTORECTL_MYSQL_OPS_PW: ops_demo_pw
+        run: |
+          output=$(./datastorectl plan --prune testdata/showcase-mysql/resources.dcl 2>&1 || true)
+          echo "$output"
+          echo "$output" | grep -Eq "would (lock out|revoke|delete caller|cascade-revoke)" \
+            || { echo "expected self-lockout guard output"; exit 1; }
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.mysql.yml down
