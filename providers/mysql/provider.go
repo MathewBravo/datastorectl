@@ -46,7 +46,8 @@ func init() {
 // Provider implements provider.Provider for MySQL clusters.
 type Provider struct {
 	client   *Client
-	version  string // declared major.minor target ("8.0" | "8.4")
+	version  string         // declared major.minor target ("8.0" | "8.4")
+	caller   callerIdentity // fetched at Configure time for self-lockout guards
 	handlers map[string]resourceHandler
 }
 
@@ -157,6 +158,27 @@ func (p *Provider) configurePasswordAuth(ctx context.Context, endpoint, tlsMode 
 		p.client = nil
 		return diags
 	}
+	if diags := p.fetchAndCacheCaller(ctx); diags.HasErrors() {
+		_ = client.Close()
+		p.client = nil
+		return diags
+	}
+	return nil
+}
+
+// fetchAndCacheCaller runs the CURRENT_USER / default_roles queries
+// and caches the result so GuardDeletes can classify without re-
+// querying.
+func (p *Provider) fetchAndCacheCaller(ctx context.Context) dcl.Diagnostics {
+	id, err := fetchCallerIdentity(ctx, p.client.DB())
+	if err != nil {
+		return dcl.Diagnostics{{
+			Severity:   dcl.SeverityError,
+			Message:    fmt.Sprintf("mysql: unable to fetch caller identity for self-lockout protection: %s", err),
+			Suggestion: "verify the connected user can execute SELECT CURRENT_USER() and SELECT on mysql.default_roles",
+		}}
+	}
+	p.caller = id
 	return nil
 }
 
@@ -281,6 +303,11 @@ func (p *Provider) configureRDSIAMAuth(ctx context.Context, endpoint, tlsMode st
 	p.client = client
 
 	if diags := p.verifyServerVersion(ctx); diags.HasErrors() {
+		_ = client.Close()
+		p.client = nil
+		return diags
+	}
+	if diags := p.fetchAndCacheCaller(ctx); diags.HasErrors() {
 		_ = client.Close()
 		p.client = nil
 		return diags
